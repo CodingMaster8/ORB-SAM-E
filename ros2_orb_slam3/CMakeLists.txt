@@ -195,6 +195,7 @@ ament_python_install_package(${PROJECT_NAME}) # Install the modules in ros2_orb_
 install(PROGRAMS
   scripts/mono_driver_node.py
   scripts/mono_driver_filtered_node.py
+  scripts/tum_driver_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
