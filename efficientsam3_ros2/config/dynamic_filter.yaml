@@ -1,0 +1,113 @@
+# Configuration for EfficientSAM3 Dynamic Object Filter Node
+# 
+# This file contains parameters for filtering dynamic objects from camera
+# images before SLAM processing.
+
+dynamic_filter_node:
+  ros__parameters:
+    # =========================================================================
+    # Model Configuration
+    # =========================================================================
+    
+    # Path to the EfficientSAM3 model checkpoint
+    # Download from: https://huggingface.co/Simon7108528/EfficientSAM3
+    model_path: "/path/to/efficient_sam3_repvit_s.pt"
+    
+    # Path to efficientsam3_arm package (leave empty if installed via pip or in PYTHONPATH)
+    efficientsam3_path: ""
+    
+    # Backbone type: "repvit", "tinyvit", or "efficientvit"
+    backbone_type: "repvit"
+    
+    # Model size: "s" (small), "m" (medium), or "l" (large)
+    model_name: "s"
+    
+    # Device for inference: "auto", "cpu", "cuda", or "mps"
+    device: "auto"
+    
+    # =========================================================================
+    # Detection Configuration
+    # =========================================================================
+    
+    # List of dynamic object classes to detect and filter
+    # These objects will be masked out before SLAM processing
+    dynamic_classes:
+      - "person"
+      - "car"
+      - "truck"
+      - "bus"
+      - "motorcycle"
+      - "bicycle"
+      - "dog"
+      - "cat"
+      - "bird"
+    
+    # Minimum confidence threshold for detections (0.0 to 1.0)
+    # Lower = more detections but more false positives
+    # Higher = fewer detections but more precise
+    confidence_threshold: 0.3
+    
+    # =========================================================================
+    # Masking Configuration
+    # =========================================================================
+    
+    # How to handle masked (dynamic) regions
+    # Options:
+    #   "blackout"  - Set pixels to black (0, 0, 0)
+    #   "grayout"   - Set pixels to gray (128, 128, 128) [RECOMMENDED]
+    #   "inpaint"   - Use OpenCV inpainting (slower but cleaner)
+    #   "blur"      - Apply Gaussian blur to masked regions
+    masking_strategy: "grayout"
+    
+    # =========================================================================
+    # Topic Configuration
+    # =========================================================================
+    
+    # Input topic for raw camera images
+    input_topic: "/camera/image_raw"
+    
+    # Output topic for filtered images (SLAM should subscribe to this)
+    output_topic: "/camera/image_filtered"
+    
+    # Whether to publish mask visualization (for debugging)
+    publish_mask: true
+    
+    # Whether to publish detection info as JSON (for debugging/logging)
+    publish_detections: false
+    
+    # =========================================================================
+    # Performance Configuration
+    # =========================================================================
+    
+    # Process every N frames (1 = every frame, 2 = every other frame, etc.)
+    # Higher values improve FPS but may miss fast-moving objects
+    # The last mask is reused for skipped frames
+    process_every_n_frames: 1
+
+
+# =========================================================================
+# Alternative configurations for different scenarios
+# =========================================================================
+
+# For indoor environments (office, home)
+# dynamic_filter_indoor:
+#   ros__parameters:
+#     dynamic_classes:
+#       - "person"
+#       - "dog"
+#       - "cat"
+#     confidence_threshold: 0.4
+#     process_every_n_frames: 2
+
+# For outdoor/driving scenarios
+# dynamic_filter_outdoor:
+#   ros__parameters:
+#     dynamic_classes:
+#       - "person"
+#       - "car"
+#       - "truck"
+#       - "bus"
+#       - "motorcycle"
+#       - "bicycle"
+#     confidence_threshold: 0.3
+#     process_every_n_frames: 1
