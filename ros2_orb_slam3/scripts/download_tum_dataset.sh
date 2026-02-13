@@ -165,8 +165,9 @@ if [ -d "$FINAL_DIR" ] && [ -f "$FINAL_DIR/rgb.txt" ]; then
     exit 0
 fi
 
-# Download URL
-DOWNLOAD_URL="$TUM_BASE_URL/freiburg${SEQUENCE#fr}/tgz/${TUM_FILENAME}.tgz"
+# Download URL - extract freiburg number (1, 2, or 3) from sequence name
+FREIBURG_NUM=$(echo "$SEQUENCE" | sed 's/fr\([0-9]\).*/\1/')
+DOWNLOAD_URL="$TUM_BASE_URL/freiburg${FREIBURG_NUM}/${TUM_FILENAME}.tgz"
 
 print_info "Downloading from: $DOWNLOAD_URL"
 print_info "This may take a few minutes..."

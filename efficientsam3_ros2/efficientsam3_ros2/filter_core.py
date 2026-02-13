@@ -92,6 +92,36 @@ class DynamicObjectFilter:
         "bird",
     ]
     
+    # Map checkpoint filename patterns to (backbone_type, model_name, text_encoder_type)
+    MODEL_FILENAME_MAP = {
+        "repvit-m0_9_mobileclip_s1": ("repvit", "m0_9", "MobileCLIP-S1"),
+        "repvit-m0_9": ("repvit", "m0_9", "MobileCLIP-S1"),
+        "repvit_m0_9": ("repvit", "m0_9", "MobileCLIP-S1"),
+        "repvit_s": ("repvit", "m0_9", "MobileCLIP-S1"),
+        "repvit_m1_1": ("repvit", "m1_1", "MobileCLIP-S1"),
+        "repvit_m2_3": ("repvit", "m2_3", "MobileCLIP-S1"),
+        "tinyvit_m": ("tinyvit", "m", "MobileCLIP-S1"),
+        "tinyvit_l": ("tinyvit", "l", "MobileCLIP-S1"),
+    }
+    
+    @staticmethod
+    def _infer_model_config(model_path: str, backbone_type: str, model_name: str):
+        """
+        Auto-detect backbone_type, model_name, and text_encoder_type from the checkpoint filename.
+        Falls back to provided defaults if detection fails.
+        """
+        import os
+        basename = os.path.basename(model_path).lower()
+        # Strip prefix and extension: "efficient_sam3_repvit-m0_9_mobileclip_s1.pth" -> "repvit-m0_9_mobileclip_s1"
+        stem = basename.replace("efficient_sam3_", "").replace(".pth", "").replace(".pt", "")
+        
+        for pattern, (bt, mn, te) in DynamicObjectFilter.MODEL_FILENAME_MAP.items():
+            if pattern in stem:
+                return bt, mn, te
+        
+        # Fallback to provided values
+        return backbone_type, model_name, "MobileCLIP-S1"
+
     def __init__(
         self,
         model_path: str,
@@ -110,8 +140,11 @@ class DynamicObjectFilter:
         self.dynamic_classes = dynamic_classes or self.DEFAULT_DYNAMIC_CLASSES
         self.confidence_threshold = confidence_threshold
         self.masking_strategy = masking_strategy
-        self.backbone_type = backbone_type
-        self.model_name = model_name
+        
+        # Auto-detect backbone, model name, and text encoder from checkpoint filename
+        self.backbone_type, self.model_name, self.text_encoder_type = self._infer_model_config(
+            model_path, backbone_type, model_name
+        )
         
         # Add efficientsam3_arm to path if specified
         if efficientsam3_path:
@@ -156,24 +189,26 @@ class DynamicObjectFilter:
         try:
             # Import EfficientSAM3 ARM modules
             from efficientsam3_arm import build_efficientsam3_image_model
-            from efficientsam3_arm.processor_arm import Sam3ProcessorARM
+            from efficientsam3_arm.model.sam3_image_processor import Sam3Processor
             
             print(f"Loading EfficientSAM3 model from {self.model_path}...")
-            print(f"Device: {self.device}, Backbone: {self.backbone_type}, Size: {self.model_name}")
+            print(f"Device: {self.device}, Backbone: {self.backbone_type}, Size: {self.model_name}, Text Encoder: {self.text_encoder_type}")
             
-            # Build model
+            # Build model (matching the reference notebook usage)
             self._model = build_efficientsam3_image_model(
                 checkpoint_path=self.model_path,
                 backbone_type=self.backbone_type,
                 model_name=self.model_name,
+                text_encoder_type=self.text_encoder_type,
+                device=self.device,
+                enable_inst_interactivity=False,
             )
             
-            # Create processor
-            self._processor = Sam3ProcessorARM(
-                self._model,
+            # Create processor (matching reference notebook usage)
+            self._processor = Sam3Processor(
+                model=self._model,
                 device=self.device,
                 confidence_threshold=self.confidence_threshold,
-                use_fp16=False,  # Safer for ARM
             )
             
             self._model_loaded = True

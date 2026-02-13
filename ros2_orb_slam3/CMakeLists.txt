@@ -7,7 +7,7 @@ project(ros2_orb_slam3)
 # Enforce use of C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2")
 
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules) # REDUNDANT?
 
@@ -121,6 +121,10 @@ add_library(orb_slam3_lib SHARED
   orb_slam3/include/Config.h
   orb_slam3/include/Settings.h
 )
+
+# Reduce optimization for Optimizer.cc to prevent OOM during compilation
+# This file has 5600+ lines of dense Eigen/g2o templates that consume 4-6GB RAM at -O2/-O3
+set_source_files_properties(orb_slam3/src/Optimizer.cc PROPERTIES COMPILE_FLAGS "-O1")
 
 set_target_properties(orb_slam3_lib PROPERTIES VERSION "${orb_slam3_lib_VERSION}") # TODO need to findout why this is required
 

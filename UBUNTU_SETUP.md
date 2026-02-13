@@ -436,19 +436,25 @@ mkdir -p ~/weights
 
 ### 7.2 Download EfficientSAM3 Checkpoint
 
-**Option A: RepViT-S (Smallest, Fastest - Recommended for real-time)**
+**Option A: RepViT-M0.9 + MobileClip-S1 (Recommended)**
+```bash
+wget -O ~/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
+    "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_repvit-m0_9_mobileclip_s1.pth"
+```
+
+**Option B: RepViT-S (Smallest, Fastest)**
 ```bash
 wget -O ~/weights/efficient_sam3_repvit_s.pt \
     "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_repvit_s.pt"
 ```
 
-**Option B: TinyViT-M (Balanced)**
+**Option C: TinyViT-M (Balanced)**
 ```bash
 wget -O ~/weights/efficient_sam3_tinyvit_m.pt \
     "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_tinyvit_m.pt"
 ```
 
-**Option C: TinyViT-L (Larger, More Accurate)**
+**Option D: TinyViT-L (Larger, More Accurate)**
 ```bash
 wget -O ~/weights/efficient_sam3_tinyvit_l.pt \
     "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_tinyvit_l.pt"
@@ -458,7 +464,7 @@ wget -O ~/weights/efficient_sam3_tinyvit_l.pt \
 
 ```bash
 ls -lh ~/weights/
-# Should show the downloaded .pt file (~20-80 MB depending on model)
+# Should show the downloaded .pth/.pt file
 ```
 
 ---
@@ -573,12 +579,12 @@ mkdir -p ~/ros2_ws/src/ros2_orb_slam3/TEST_DATASET/tum
 cd ~/ros2_ws/src/ros2_orb_slam3/TEST_DATASET/tum
 
 # Download fr1/desk sequence
-wget https://cvg.cit.tum.de/rgbd/dataset/freiburg1/tgz/rgbd_dataset_freiburg1_desk.tgz
+wget https://cvg.cit.tum.de/rgbd/dataset/freiburg1/rgbd_dataset_freiburg1_desk.tgz
 tar -xzf rgbd_dataset_freiburg1_desk.tgz
 rm rgbd_dataset_freiburg1_desk.tgz
 
 # Download fr3/walking_xyz (has dynamic objects - people walking)
-wget https://cvg.cit.tum.de/rgbd/dataset/freiburg3/tgz/rgbd_dataset_freiburg3_walking_xyz.tgz
+wget https://cvg.cit.tum.de/rgbd/dataset/freiburg3/rgbd_dataset_freiburg3_walking_xyz.tgz
 tar -xzf rgbd_dataset_freiburg3_walking_xyz.tgz
 rm rgbd_dataset_freiburg3_walking_xyz.tgz
 ```
@@ -608,7 +614,7 @@ This is especially useful for sequences with people (fr3/walking_*):
 # Terminal 1 - Start EfficientSAM3 filter node
 source ~/ros2_ws/install/setup.bash
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
     -p input_topic:=/camera/image_raw \
     -p output_topic:=/camera/image_filtered \
     -p confidence_threshold:=0.3
@@ -670,7 +676,7 @@ echo "Use Filter: $USE_FILTER"
 if [ "$USE_FILTER" = "true" ]; then
     # Start filter in background
     ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-        -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt &
+        -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth &
     FILTER_PID=$!
     sleep 5
     
@@ -722,7 +728,7 @@ cd ~/ros2_ws/src/efficientsam3_ros2/efficientsam3_ros2
 # Test with sample image from ORB-SLAM3 dataset
 python3 filter_core.py \
     --image ~/ros2_ws/src/ros2_orb_slam3/TEST_DATASET/sample_euroc_MH05/mav0/cam0/data/1403636579763555584.png \
-    --model ~/weights/efficient_sam3_repvit_s.pt \
+    --model ~/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
     --efficientsam3-path ~/ros2_ws/src/efficientsam3_arm \
     --no-show
 ```
@@ -741,7 +747,7 @@ Detected X objects
 # Terminal 1
 source ~/ros2_ws/install/setup.bash
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
     -p efficientsam3_path:=$HOME/ros2_ws/src/efficientsam3_arm
 
 # Terminal 2
@@ -775,7 +781,7 @@ If working correctly, you should see the Pangolin visualization window with came
 ```bash
 # Terminal 1 - Launch filter and view nodes
 ros2 launch efficientsam3_ros2 slam_pipeline.launch.py \
-    model_path:=$HOME/weights/efficient_sam3_repvit_s.pt
+    model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth
 
 # Terminal 2 - Start ORB-SLAM3 C++ node with filtered images
 ros2 run ros2_orb_slam3 mono_node_cpp --ros-args \
@@ -795,7 +801,7 @@ ros2 run ros2_orb_slam3 mono_driver_filtered_node.py --ros-args \
 # Terminal 1 - Start EfficientSAM3 filter node
 source ~/ros2_ws/install/setup.bash
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
     -p input_topic:=/camera/image_raw \
     -p output_topic:=/camera/image_filtered \
     -p confidence_threshold:=0.3
@@ -826,7 +832,7 @@ source ~/ros2_ws/install/setup.bash
 
 # Start filter in background
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt &
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth &
 FILTER_PID=$!
 sleep 5
 
@@ -909,7 +915,7 @@ nano ~/ros2_ws/src/efficientsam3_ros2/config/dynamic_filter.yaml
 ```yaml
 dynamic_filter_node:
   ros__parameters:
-    model_path: "/home/user/weights/efficient_sam3_repvit_s.pt"
+    model_path: "/home/user/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth"
     dynamic_classes:
       - "person"
       - "car"
@@ -962,10 +968,10 @@ pip3 install -e .
 
 ```bash
 # Check file exists
-ls -la ~/weights/efficient_sam3_repvit_s.pt
+ls -la ~/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth
 
 # Check PyTorch can load it
-python3 -c "import torch; torch.load('$HOME/weights/efficient_sam3_repvit_s.pt', map_location='cpu')"
+python3 -c "import torch; torch.load('$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth', map_location='cpu')"
 ```
 
 ### Issue: Pangolin errors / "cannot find -lpangolin"
@@ -1011,12 +1017,12 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/ros2_ws/install/ros2_orb_slam3/lib
 # Use frame skipping
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
     -p process_every_n_frames:=2 \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth
 
 # Use CUDA if available
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
     -p device:=cuda \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth
 ```
 
 ### Issue: No detections from filter
@@ -1025,7 +1031,7 @@ ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
 # Lower confidence threshold
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
     -p confidence_threshold:=0.15 \
-    -p model_path:=$HOME/weights/efficient_sam3_repvit_s.pt
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth
 ```
 
 ---
@@ -1036,8 +1042,8 @@ ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
 
 RepViT-S is the fastest option:
 ```bash
-wget -O ~/weights/efficient_sam3_repvit_s.pt \
-    "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_repvit_s.pt"
+wget -O ~/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
+    "https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_repvit-m0_9_mobileclip_s1.pth"
 ```
 
 ### 2. Enable Frame Skipping

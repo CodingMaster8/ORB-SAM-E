@@ -12,6 +12,7 @@ REQUIREMENTS
 
 //* Includes
 #include "ros2_orb_slam3/common.hpp"
+#include "rclcpp/qos.hpp"
 
 //* Constructor
 MonocularMode::MonocularMode() :Node("mono_node_cpp")
@@ -102,8 +103,13 @@ MonocularMode::MonocularMode() :Node("mono_node_cpp")
     //* publisher to send out acknowledgement
     configAck_publisher_ = this->create_publisher<std_msgs::msg::String>(pubconfigackName, 10);
 
+    //* QoS profile matching the Python driver (BEST_EFFORT reliability)
+    rclcpp::QoS image_qos(1);
+    image_qos.best_effort();
+    image_qos.keep_last(1);
+
     //* subscrbite to the image messages coming from the Python driver node
-    subImgMsg_subscription_= this->create_subscription<sensor_msgs::msg::Image>(subImgMsgName, 1, std::bind(&MonocularMode::Img_callback, this, _1));
+    subImgMsg_subscription_= this->create_subscription<sensor_msgs::msg::Image>(subImgMsgName, image_qos, std::bind(&MonocularMode::Img_callback, this, _1));
 
     //* subscribe to receive the timestep
     subTimestepMsg_subscription_= this->create_subscription<std_msgs::msg::Float64>(subTimestepMsgName, 1, std::bind(&MonocularMode::Timestep_callback, this, _1));
@@ -128,12 +134,20 @@ MonocularMode::~MonocularMode()
 //* Callback which accepts experiment parameters from the Python node
 void MonocularMode::experimentSetting_callback(const std_msgs::msg::String& msg){
     
-    // std::cout<<"experimentSetting_callback"<<std::endl;
+    // Guard against double initialization - only process the first config message
+    if (bSettingsFromPython) {
+        RCLCPP_WARN(this->get_logger(), "Already initialized, ignoring duplicate config message");
+        // Still send ACK so driver doesn't hang
+        auto message = std_msgs::msg::String();
+        message.data = "ACK";
+        configAck_publisher_->publish(message);
+        return;
+    }
+    
     bSettingsFromPython = true;
     experimentConfig = msg.data.c_str();
-    // receivedConfig = experimentConfig; // Redundant
     
-    RCLCPP_INFO(this->get_logger(), "Configuration YAML file name: %s", this->receivedConfig.c_str());
+    RCLCPP_INFO(this->get_logger(), "Configuration YAML file name: %s", experimentConfig.c_str());
 
     //* Publish acknowledgement
     auto message = std_msgs::msg::String();
