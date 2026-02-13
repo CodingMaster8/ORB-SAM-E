@@ -69,6 +69,7 @@ class DynamicFilterNode(Node):
         self.model_path = self.get_parameter('model_path').value
         self.efficientsam3_path = self.get_parameter('efficientsam3_path').value
         self.dynamic_classes = self.get_parameter('dynamic_classes').value
+        self.dynamic_prompts = self.get_parameter('dynamic_prompts').value
         self.confidence_threshold = self.get_parameter('confidence_threshold').value
         self.masking_strategy_str = self.get_parameter('masking_strategy').value
         self.input_topic = self.get_parameter('input_topic').value
@@ -104,7 +105,7 @@ class DynamicFilterNode(Node):
         self.get_logger().info("Dynamic Filter Node Configuration:")
         self.get_logger().info(f"  Model path: {self.model_path}")
         self.get_logger().info(f"  Device: {self.device}")
-        self.get_logger().info(f"  Dynamic classes: {self.dynamic_classes}")
+        self.get_logger().info(f"  Dynamic prompts: {self.dynamic_prompts}")
         self.get_logger().info(f"  Confidence threshold: {self.confidence_threshold}")
         self.get_logger().info(f"  Masking strategy: {masking_strategy.value}")
         self.get_logger().info(f"  Input topic: {self.input_topic}")
@@ -121,6 +122,7 @@ class DynamicFilterNode(Node):
             model_path=self.model_path,
             efficientsam3_path=self.efficientsam3_path if self.efficientsam3_path else None,
             dynamic_classes=self.dynamic_classes,
+            dynamic_prompts=self.dynamic_prompts,
             confidence_threshold=self.confidence_threshold,
             masking_strategy=masking_strategy,
             device=self.device,
@@ -183,10 +185,13 @@ class DynamicFilterNode(Node):
         """Declare all ROS2 parameters with default values."""
         self.declare_parameter('model_path', '')
         self.declare_parameter('efficientsam3_path', '')
-        self.declare_parameter('dynamic_classes', [
-            'person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat'
+        self.declare_parameter('dynamic_classes', ['person'])
+        # Multi-prompt body-part prompts that work well with MobileCLIP-S1
+        self.declare_parameter('dynamic_prompts', [
+            'human leg and hands', 'human shirt', 'human face',
+            'human hands', 'humans pants', 'human head'
         ])
-        self.declare_parameter('confidence_threshold', 0.3)
+        self.declare_parameter('confidence_threshold', 0.03)
         self.declare_parameter('masking_strategy', 'grayout')
         self.declare_parameter('input_topic', '/camera/image_raw')
         self.declare_parameter('output_topic', '/camera/image_filtered')

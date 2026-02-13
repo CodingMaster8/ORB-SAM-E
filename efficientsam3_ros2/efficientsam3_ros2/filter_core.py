@@ -79,17 +79,21 @@ class DynamicObjectFilter:
         model_name: EfficientSAM3 model size (default: "s" for small)
     """
     
-    # Default dynamic object classes commonly found in SLAM environments
+    # Default body-part prompts that work well with MobileCLIP-S1 text encoder.
+    # Generic class names like "person" score very low; body-part prompts
+    # produce much stronger detections. We union all masks for the final result.
+    DEFAULT_DYNAMIC_PROMPTS = [
+        "human leg and hands",
+        "human shirt",
+        "human face",
+        "human hands",
+        "humans pants",
+        "human head",
+    ]
+    
+    # Legacy: kept for API compatibility but DEFAULT_DYNAMIC_PROMPTS is used instead
     DEFAULT_DYNAMIC_CLASSES = [
         "person",
-        "car", 
-        "truck",
-        "bus",
-        "motorcycle",
-        "bicycle",
-        "dog",
-        "cat",
-        "bird",
     ]
     
     # Map checkpoint filename patterns to (backbone_type, model_name, text_encoder_type)
@@ -127,7 +131,8 @@ class DynamicObjectFilter:
         model_path: str,
         efficientsam3_path: Optional[str] = None,
         dynamic_classes: Optional[List[str]] = None,
-        confidence_threshold: float = 0.3,
+        dynamic_prompts: Optional[List[str]] = None,
+        confidence_threshold: float = 0.03,
         masking_strategy: MaskingStrategy = MaskingStrategy.GRAYOUT,
         device: str = "auto",
         backbone_type: str = "repvit",
@@ -138,6 +143,7 @@ class DynamicObjectFilter:
         
         self.model_path = model_path
         self.dynamic_classes = dynamic_classes or self.DEFAULT_DYNAMIC_CLASSES
+        self.dynamic_prompts = dynamic_prompts or self.DEFAULT_DYNAMIC_PROMPTS
         self.confidence_threshold = confidence_threshold
         self.masking_strategy = masking_strategy
         
@@ -161,9 +167,6 @@ class DynamicObjectFilter:
         self._processor = None
         self._model_loaded = False
         
-        # Build the text prompt from dynamic classes
-        self._text_prompt = self._build_text_prompt()
-        
         # Statistics
         self.total_frames_processed = 0
         self.total_detections = 0
@@ -175,11 +178,6 @@ class DynamicObjectFilter:
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return "mps"
         return "cpu"
-    
-    def _build_text_prompt(self) -> str:
-        """Build the text prompt for EfficientSAM3 from dynamic classes."""
-        # EfficientSAM3 expects prompts like "person. car. dog."
-        return ". ".join(self.dynamic_classes) + "."
     
     def _load_model(self) -> None:
         """Lazy load the EfficientSAM3 model."""
@@ -204,7 +202,7 @@ class DynamicObjectFilter:
                 enable_inst_interactivity=False,
             )
             
-            # Create processor (matching reference notebook usage)
+            # Create processor
             self._processor = Sam3Processor(
                 model=self._model,
                 device=self.device,
@@ -253,43 +251,48 @@ class DynamicObjectFilter:
             pil_image = image
             original_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Run inference
-        state = self._processor.set_image(pil_image)
-        state = self._processor.set_text_prompt(self._text_prompt, state)
-        
-        # Extract detections
+        # Multi-prompt union detection:
+        # MobileCLIP-S1 responds poorly to generic class names like "person".
+        # Instead, we run multiple body-part prompts and union all masks.
+        # set_image() is called once; each prompt reuses the image embedding.
+        h, w = original_bgr.shape[:2]
+        combined_mask = np.zeros((h, w), dtype=np.uint8)
         detections = []
-        combined_mask = None
         
-        if "masks" in state and state["masks"] is not None and len(state["masks"]) > 0:
-            masks = state["masks"].cpu().numpy()
-            boxes = state["boxes"].cpu().numpy()
-            scores = state["scores"].cpu().numpy()
+        state = self._processor.set_image(pil_image)
+        
+        for prompt in self.dynamic_prompts:
+            self._processor.reset_all_prompts(state)
+            state = self._processor.set_text_prompt(state=state, prompt=prompt)
             
-            # Remove channel dimension if present
-            if masks.ndim == 4:
-                masks = masks.squeeze(1)
-            
-            h, w = original_bgr.shape[:2]
-            combined_mask = np.zeros((h, w), dtype=np.uint8)
-            
-            for i in range(len(scores)):
-                # Create detection object
-                detection = Detection(
-                    class_name="dynamic_object",  # EfficientSAM3 doesn't provide class names
-                    confidence=float(scores[i]),
-                    bbox=tuple(boxes[i].tolist()),
-                    mask=masks[i] > 0.5,
-                )
-                detections.append(detection)
+            if "boxes" in state and len(state["boxes"]) > 0:
+                masks = state["masks"].cpu().numpy()
+                boxes = state["boxes"].cpu().numpy()
+                scores = state["scores"].cpu().numpy()
                 
-                # Add to combined mask
-                mask_binary = (masks[i] > 0.5).astype(np.uint8)
-                # Resize mask to image size if needed
-                if mask_binary.shape != (h, w):
-                    mask_binary = cv2.resize(mask_binary, (w, h), interpolation=cv2.INTER_NEAREST)
-                combined_mask = np.maximum(combined_mask, mask_binary)
-            
+                for i in range(len(scores)):
+                    mask_raw = masks[i]
+                    # Remove channel dimension if present (shape: [1, H, W] -> [H, W])
+                    if mask_raw.ndim == 3:
+                        mask_raw = mask_raw[0]
+                    
+                    mask_binary = (mask_raw > 0.5).astype(np.uint8)
+                    # Resize mask to image size if needed
+                    if mask_binary.shape != (h, w):
+                        mask_binary = cv2.resize(mask_binary, (w, h), interpolation=cv2.INTER_NEAREST)
+                    
+                    # Union into combined mask
+                    combined_mask = np.maximum(combined_mask, mask_binary)
+                    
+                    detection = Detection(
+                        class_name=prompt,
+                        confidence=float(scores[i]),
+                        bbox=tuple(boxes[i].tolist()),
+                        mask=mask_binary.astype(bool),
+                    )
+                    detections.append(detection)
+        
+        if detections:
             self.total_detections += len(detections)
         
         # Apply masking strategy

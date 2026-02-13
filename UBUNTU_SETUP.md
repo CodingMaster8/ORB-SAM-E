@@ -999,6 +999,8 @@ cmake .. && make -j$(nproc)
 cd ~/ros2_ws
 rm -rf build install log
 colcon build --symlink-install
+
+MAKEFLAGS="-j2" colcon build --symlink-install --parallel-workers 1 --executor sequential
 ```
 
 ### Issue: "libDBoW2.so not found" at runtime
