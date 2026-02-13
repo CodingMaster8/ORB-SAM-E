@@ -91,6 +91,14 @@ class DynamicObjectFilter:
         "human head",
     ]
     
+    # Reduced prompt set for CPU-constrained environments (3 prompts ≈ half
+    # the inference time while still covering head-to-toe).
+    FAST_DYNAMIC_PROMPTS = [
+        "human head and face",
+        "human shirt and body",
+        "human legs and pants",
+    ]
+    
     # Legacy: kept for API compatibility but DEFAULT_DYNAMIC_PROMPTS is used instead
     DEFAULT_DYNAMIC_CLASSES = [
         "person",
@@ -137,9 +145,17 @@ class DynamicObjectFilter:
         device: str = "auto",
         backbone_type: str = "repvit",
         model_name: str = "s",
+        num_threads: int = 0,
     ):
         if not TORCH_AVAILABLE:
             raise RuntimeError("PyTorch is required but not installed")
+        
+        # Set CPU thread count before anything else (0 = PyTorch default)
+        if num_threads > 0:
+            torch.set_num_threads(num_threads)
+            torch.set_num_interop_threads(max(1, num_threads // 2))
+            print(f"PyTorch using {num_threads} CPU threads "
+                  f"({max(1, num_threads // 2)} interop threads)")
         
         self.model_path = model_path
         self.dynamic_classes = dynamic_classes or self.DEFAULT_DYNAMIC_CLASSES
@@ -219,6 +235,13 @@ class DynamicObjectFilter:
             )
         except Exception as e:
             raise RuntimeError(f"Failed to load EfficientSAM3 model: {e}")
+    
+    def ensure_model_loaded(self) -> None:
+        """
+        Eagerly load the model. Call this at startup to avoid cold-start
+        latency on the first process_frame() call.
+        """
+        self._load_model()
     
     def process_frame(
         self, 

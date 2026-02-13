@@ -895,7 +895,50 @@ ros2 run rqt_image_view rqt_image_view /dynamic_filter/mask
 | `output_topic` | string | /camera/image_filtered | Output filtered image topic |
 | `publish_mask` | bool | true | Publish mask visualization |
 | `device` | string | "auto" | Inference device (auto/cpu/cuda) |
-| `process_every_n_frames` | int | 1 | Frame skip for performance |
+| `process_every_n_frames` | int | 1 | Frame skip: reuse last mask for N-1 frames |
+| `num_threads` | int | 0 | PyTorch CPU threads (0 = auto) |
+| `dynamic_prompts` | list | [6 body-part prompts] | Text prompts for detection (fewer = faster) |
+
+### Performance Tuning — Filter Node Commands
+
+The filter node has three speed profiles. Choose based on your hardware:
+
+**Default (GPU / Apple Silicon)** — 6 prompts, no frame skip:
+
+```bash
+ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
+    -p input_topic:=/camera/image_raw \
+    -p output_topic:=/camera/image_filtered
+```
+
+**Fast (CPU with multiple cores)** — 3 prompts, skip every 5 frames, use all cores:
+
+```bash
+ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
+    -p input_topic:=/camera/image_raw \
+    -p output_topic:=/camera/image_filtered \
+    -p process_every_n_frames:=5 \
+    -p num_threads:=4 \
+    -p dynamic_prompts:="['human head and face', 'human shirt and body', 'human legs and pants']"
+```
+
+**Ultra-fast (VM / low-resource CPU)** — 1 combined prompt, skip every 5 frames, use all cores:
+
+```bash
+ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
+    -p model_path:=$HOME/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth \
+    -p input_topic:=/camera/image_raw \
+    -p output_topic:=/camera/image_filtered \
+    -p process_every_n_frames:=5 \
+    -p num_threads:=4 \
+    -p dynamic_prompts:="['human head and face shirt and body legs and pants']"
+```
+
+> **Tip:** The model loads eagerly at startup (~20-30s on CPU). Wait for the
+> `Model ready!` log before starting the TUM driver. The first frame is always
+> processed immediately; intermediate frames reuse the last mask at near-zero cost.
 
 ### Masking Strategies
 
@@ -916,17 +959,15 @@ nano ~/ros2_ws/src/efficientsam3_ros2/config/dynamic_filter.yaml
 dynamic_filter_node:
   ros__parameters:
     model_path: "/home/user/weights/efficient_sam3_repvit-m0_9_mobileclip_s1.pth"
-    dynamic_classes:
-      - "person"
-      - "car"
-      - "bicycle"
-      - "motorcycle"
-      - "dog"
-      - "cat"
-    confidence_threshold: 0.3
+    dynamic_prompts:
+      - "human head and face"
+      - "human shirt and body"
+      - "human legs and pants"
+    confidence_threshold: 0.03
     masking_strategy: "grayout"
     device: "auto"
-    process_every_n_frames: 1
+    process_every_n_frames: 5
+    num_threads: 4
 ```
 
 ---

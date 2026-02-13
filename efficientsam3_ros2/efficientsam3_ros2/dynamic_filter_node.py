@@ -80,6 +80,7 @@ class DynamicFilterNode(Node):
         self.backbone_type = self.get_parameter('backbone_type').value
         self.model_name = self.get_parameter('model_name').value
         self.process_every_n_frames = self.get_parameter('process_every_n_frames').value
+        self.num_threads = self.get_parameter('num_threads').value
         
         # Validate model path
         if not self.model_path:
@@ -111,12 +112,14 @@ class DynamicFilterNode(Node):
         self.get_logger().info(f"  Input topic: {self.input_topic}")
         self.get_logger().info(f"  Output topic: {self.output_topic}")
         self.get_logger().info(f"  Process every N frames: {self.process_every_n_frames}")
+        self.get_logger().info(f"  Num prompts: {len(self.dynamic_prompts)}")
+        self.get_logger().info(f"  CPU threads: {self.num_threads if self.num_threads > 0 else 'auto'}")
         self.get_logger().info("=" * 60)
         
         # Initialize CV Bridge
         self.bridge = CvBridge()
         
-        # Initialize the filter (lazy loading of model)
+        # Initialize the filter
         self.get_logger().info("Initializing DynamicObjectFilter...")
         self.filter = DynamicObjectFilter(
             model_path=self.model_path,
@@ -128,11 +131,19 @@ class DynamicFilterNode(Node):
             device=self.device,
             backbone_type=self.backbone_type,
             model_name=self.model_name,
+            num_threads=self.num_threads,
         )
+        
+        # Eagerly load the model NOW so the first frame isn't blocked by cold start
+        self.get_logger().info("Loading EfficientSAM3 model (this may take 20-30s on CPU)...")
+        self.filter.ensure_model_loaded()
+        self.get_logger().info("Model ready!")
         
         # Frame counter for skip logic
         self.frame_count = 0
         self.last_mask: Optional[np.ndarray] = None
+        self.skipped_frames = 0
+        self.reused_frames = 0
         
         # Set up QoS profile for image topics
         image_qos = QoSProfile(
@@ -201,6 +212,7 @@ class DynamicFilterNode(Node):
         self.declare_parameter('backbone_type', 'repvit')
         self.declare_parameter('model_name', 's')
         self.declare_parameter('process_every_n_frames', 1)
+        self.declare_parameter('num_threads', 0)  # 0 = PyTorch default
     
     def image_callback(self, msg: Image):
         """
@@ -218,11 +230,17 @@ class DynamicFilterNode(Node):
             self.get_logger().error(f"CV Bridge error: {e}")
             return
         
-        # Check if we should process this frame or reuse last mask
-        should_process = (self.frame_count % self.process_every_n_frames) == 0
+        # Process first frame immediately, then every N-th frame after that
+        should_process = (
+            self.frame_count == 1  # always process the very first frame
+            or (self.frame_count % self.process_every_n_frames) == 0
+        )
         
         if should_process:
             # Run full inference
+            self.get_logger().debug(
+                f"Frame {self.frame_count}: running full inference"
+            )
             filtered_image, mask, detections = self.filter.process_frame(cv_image)
             self.last_mask = mask
             
@@ -242,9 +260,11 @@ class DynamicFilterNode(Node):
             if self.last_mask is not None and self.last_mask.any():
                 filtered_image = self.filter._apply_mask(cv_image, self.last_mask)
                 mask = self.last_mask
+                self.reused_frames += 1
             else:
                 filtered_image = cv_image
                 mask = None
+                self.skipped_frames += 1
         
         # Publish filtered image
         try:
@@ -269,7 +289,10 @@ class DynamicFilterNode(Node):
         """Periodically log processing statistics."""
         stats = self.filter.get_stats()
         self.get_logger().info(
-            f"Stats: frames={stats['total_frames_processed']}, "
+            f"Stats: received={self.frame_count}, "
+            f"inferred={stats['total_frames_processed']}, "
+            f"reused={self.reused_frames}, "
+            f"skipped(no mask)={self.skipped_frames}, "
             f"detections={stats['total_detections']}, "
             f"avg_det/frame={stats['avg_detections_per_frame']:.2f}"
         )
