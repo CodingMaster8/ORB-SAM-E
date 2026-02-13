@@ -56,13 +56,13 @@ The pipeline filters out dynamic objects (people, vehicles, animals) from camera
 ## System Requirements
 
 ### Hardware (Minimum)
-- **CPU**: x86_64 architecture (Intel/AMD)
+- **CPU**: x86_64 (Intel/AMD) or ARM aarch64 (e.g., NVIDIA Jetson, Raspberry Pi 5, Apple Silicon via VM)
 - **RAM**: 8 GB (16 GB recommended)
 - **Storage**: 20 GB free space
 - **GPU**: Optional (CUDA-capable NVIDIA GPU for acceleration)
 
 ### Hardware (Recommended)
-- **CPU**: Intel i5/i7 or AMD Ryzen 5/7
+- **CPU**: Intel i5/i7, AMD Ryzen 5/7, or ARM Cortex-A76+
 - **RAM**: 16-32 GB
 - **GPU**: NVIDIA GPU with CUDA support (RTX 20xx or newer)
 
@@ -282,6 +282,8 @@ ls /usr/local/lib | grep -i pangolin
 
 The ORB-SLAM3 package includes DBoW2 and g2o libraries that may need rebuilding.
 
+> **ARM users:** The pre-built libraries in the repository were compiled for x86_64. You **must** rebuild them on ARM (aarch64) — the steps below handle this automatically. If you already have x86_64 `.so` files in the `lib/` directories, the clean rebuild steps below will replace them with native ARM binaries.
+
 ### 5.1 Create Workspace
 
 ```bash
@@ -311,6 +313,10 @@ scp -r /Users/pablovargas/dev/personal/ORB-SAM-E/ros2_orb_slam3 user@ubuntu-ip:~
 
 ```bash
 cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2
+
+# Clean any previous build (important on ARM if pre-built x86_64 binaries exist)
+rm -rf build
+
 mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
@@ -320,10 +326,16 @@ make -j$(nproc)
 
 ```bash
 cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o
+
+# Clean any previous build (important on ARM if pre-built x86_64 binaries exist)
+rm -rf build
+
 mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
 ```
+
+> **Note:** You may see deprecation warnings about `Eigen::AlignedBit` during the g2o build. These are harmless and do not affect the resulting library.
 
 ### 5.5 Verify Libraries Built
 
@@ -333,6 +345,15 @@ ls ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2/lib/
 
 ls ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o/lib/
 # Should show: libg2o.so
+```
+
+**On ARM, verify the libraries match your architecture:**
+```bash
+file ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2/lib/libDBoW2.so
+# Should show: ELF 64-bit LSB shared object, ARM aarch64
+
+file ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o/lib/libg2o.so
+# Should show: ELF 64-bit LSB shared object, ARM aarch64
 ```
 
 ---
@@ -349,11 +370,17 @@ sudo apt install -y \
     python3-venv
 ```
 
+> **Ubuntu 24.04 (PEP 668):** Ubuntu 24.04 marks the system Python as "externally managed," so `pip3 install` will fail by default. Since ROS 2 nodes need system-wide access to these packages, add `--break-system-packages` to all `pip3 install` commands below. Alternatively, you can configure this globally:
+> ```bash
+> mkdir -p ~/.config/pip
+> echo -e "[global]\nbreak-system-packages = true" > ~/.config/pip/pip.conf
+> ```
+
 ### 6.2 Install PyTorch
 
-**For CPU only (default, works everywhere):**
+**For CPU only (default, works on x86_64 and ARM aarch64):**
 ```bash
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip3 install --break-system-packages torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
 **For CUDA (if you have NVIDIA GPU):**
@@ -362,30 +389,39 @@ pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 nvidia-smi
 
 # Install matching PyTorch (example for CUDA 12.1)
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip3 install --break-system-packages torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### 6.3 Install EfficientSAM3 ARM Package
 
 ```bash
-cd ~/ros2_ws/src/efficientsam3_arm
-pip3 install -e .
+cd ~/ros2_ws/src/ORB-SAM-E/efficientsam3_arm
+pip3 install --break-system-packages -e .
 ```
 
 ### 6.4 Install Additional Python Packages
 
 ```bash
-pip3 install \
+pip3 install --break-system-packages \
     pillow \
     natsort \
     matplotlib \
-    scipy
+    scipy \
+    einops \
+    pycocotools
 ```
+
+> **Note:** `einops` and `pycocotools` are required by the EfficientSAM3 ARM model but are not listed in its core dependencies. They must be installed explicitly.
 
 ### 6.5 Verify PyTorch Installation
 
 ```bash
 python3 -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+Verify EfficientSAM3 ARM imports work:
+```bash
+python3 -c "from efficientsam3_arm import build_efficientsam3_image_model; print('efficientsam3_arm: OK')"
 ```
 
 ---
@@ -890,6 +926,26 @@ dynamic_filter_node:
 ---
 
 ## Troubleshooting
+
+### Issue: Third-party libraries fail on ARM (aarch64)
+
+If you see errors like `cannot execute binary file: Exec format error` or linker errors when building ORB-SLAM3, the pre-built `.so` files are x86_64 binaries. You must rebuild them natively:
+
+```bash
+# Verify the problem
+file ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2/lib/libDBoW2.so
+# If it shows "x86-64" instead of "ARM aarch64", rebuild:
+
+# Rebuild DBoW2
+cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2
+rm -rf build && mkdir build && cd build
+cmake .. && make -j$(nproc)
+
+# Rebuild g2o
+cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o
+rm -rf build && mkdir build && cd build
+cmake .. && make -j$(nproc)
+```
 
 ### Issue: "Module not found: efficientsam3_arm"
 

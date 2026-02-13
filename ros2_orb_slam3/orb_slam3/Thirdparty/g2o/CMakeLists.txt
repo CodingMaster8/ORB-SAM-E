@@ -1,4 +1,14 @@
-set(g2o_SOURCE_DIR "${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/g2o")
+cmake_minimum_required(VERSION 3.10)
+project(g2o)
+
+# Support both standalone build and being included from parent project
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  # Standalone build
+  set(g2o_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+else()
+  # Included from parent project
+  set(g2o_SOURCE_DIR "${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/g2o")
+endif()
 
 SET(g2o_C_FLAGS)
 SET(g2o_CXX_FLAGS)
@@ -21,6 +31,12 @@ SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${g2o_LIBRARY_OUTPUT_DIRECTORY})
 # Set search directory for looking for our custom CMake scripts to
 # look for SuiteSparse, QGLViewer, and Eigen3.
 LIST(APPEND CMAKE_MODULE_PATH ${g2o_SOURCE_DIR}/cmake_modules)
+
+# Find Eigen3 for standalone builds
+if(NOT G2O_EIGEN3_INCLUDE)
+  find_package(Eigen3 REQUIRED)
+  set(G2O_EIGEN3_INCLUDE ${EIGEN3_INCLUDE_DIR})
+endif()
 
 # Detect OS and define macros appropriately
 IF(UNIX)
