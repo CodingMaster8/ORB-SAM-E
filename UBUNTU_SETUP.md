@@ -310,7 +310,7 @@ scp -r /Users/pablovargas/dev/personal/ORB-SAM-E/ros2_orb_slam3 user@ubuntu-ip:~
 ### 5.3 Build DBoW2
 
 ```bash
-cd ~/ros2_ws/src/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2
+cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2
 mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
@@ -319,7 +319,7 @@ make -j$(nproc)
 ### 5.4 Build g2o
 
 ```bash
-cd ~/ros2_ws/src/ros2_orb_slam3/orb_slam3/Thirdparty/g2o
+cd ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o
 mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
@@ -328,10 +328,10 @@ make -j$(nproc)
 ### 5.5 Verify Libraries Built
 
 ```bash
-ls ~/ros2_ws/src/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2/lib/
+ls ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/DBoW2/lib/
 # Should show: libDBoW2.so
 
-ls ~/ros2_ws/src/ros2_orb_slam3/orb_slam3/Thirdparty/g2o/lib/
+ls ~/ros2_ws/src/ORB-SAM-E/ros2_orb_slam3/orb_slam3/Thirdparty/g2o/lib/
 # Should show: libg2o.so
 ```
 
