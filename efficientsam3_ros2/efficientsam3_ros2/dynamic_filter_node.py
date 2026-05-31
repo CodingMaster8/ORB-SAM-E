@@ -81,6 +81,7 @@ class DynamicFilterNode(Node):
         self.model_name = self.get_parameter('model_name').value
         self.process_every_n_frames = self.get_parameter('process_every_n_frames').value
         self.num_threads = self.get_parameter('num_threads').value
+        self.metrics_output = self.get_parameter('metrics_output').value
         
         # Validate model path
         if not self.model_path:
@@ -212,6 +213,8 @@ class DynamicFilterNode(Node):
         self.declare_parameter('backbone_type', 'repvit')
         self.declare_parameter('model_name', 's')
         self.declare_parameter('process_every_n_frames', 1)
+        # If set, filtering/timing stats are written here (JSON) on shutdown.
+        self.declare_parameter('metrics_output', '')
         self.declare_parameter('num_threads', 0)  # 0 = PyTorch default
     
     def image_callback(self, msg: Image):
@@ -294,14 +297,31 @@ class DynamicFilterNode(Node):
             f"reused={self.reused_frames}, "
             f"skipped(no mask)={self.skipped_frames}, "
             f"detections={stats['total_detections']}, "
-            f"avg_det/frame={stats['avg_detections_per_frame']:.2f}"
+            f"avg_det/frame={stats['avg_detections_per_frame']:.2f}, "
+            f"inference={stats['inference_fps']:.1f} FPS "
+            f"({stats['inference_mean_ms']:.1f} ms), "
+            f"device={stats['device']}"
         )
+
+    def write_metrics(self):
+        """Write the final filtering/timing stats to JSON (if metrics_output set)."""
+        if not self.metrics_output:
+            return
+        try:
+            import json
+            stats = self.filter.get_stats()
+            with open(self.metrics_output, 'w') as f:
+                json.dump(stats, f, indent=2)
+            self.get_logger().info(f"Wrote filter metrics to {self.metrics_output}")
+        except Exception as e:
+            self.get_logger().error(f"Failed to write metrics: {e}")
 
 
 def main(args=None):
     """Main entry point for the node."""
     rclpy.init(args=args)
     
+    node = None
     try:
         node = DynamicFilterNode()
         rclpy.spin(node)
@@ -312,6 +332,8 @@ def main(args=None):
         import traceback
         traceback.print_exc()
     finally:
+        if node is not None:
+            node.write_metrics()
         rclpy.shutdown()
 
 

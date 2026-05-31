@@ -18,6 +18,7 @@ Usage (standalone testing):
 
 import sys
 import os
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
@@ -186,6 +187,10 @@ class DynamicObjectFilter:
         # Statistics
         self.total_frames_processed = 0
         self.total_detections = 0
+        self.frames_with_detections = 0
+        self.total_masked_pixel_ratio = 0.0   # accumulator; mean = / frames
+        # Per-frame inference latency (seconds) for FPS / percentile reporting.
+        self.inference_times: List[float] = []
     
     def _get_optimal_device(self) -> str:
         """Auto-detect the best available device."""
@@ -281,7 +286,10 @@ class DynamicObjectFilter:
         h, w = original_bgr.shape[:2]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
         detections = []
-        
+
+        # Run inference (timed). Synchronize CUDA so GPU timing is accurate.
+        self._cuda_sync()
+        _t_start = time.perf_counter()
         state = self._processor.set_image(pil_image)
         
         for prompt in self.dynamic_prompts:
@@ -314,19 +322,33 @@ class DynamicObjectFilter:
                         mask=mask_binary.astype(bool),
                     )
                     detections.append(detection)
-        
+
+        # Stop the inference timer once all prompts have been processed.
+        self._cuda_sync()
+        self.inference_times.append(time.perf_counter() - _t_start)
+
         if detections:
             self.total_detections += len(detections)
         
         # Apply masking strategy
         if combined_mask is not None and combined_mask.any():
             filtered_image = self._apply_mask(original_bgr, combined_mask)
+            self.frames_with_detections += 1
+            self.total_masked_pixel_ratio += float(
+                np.count_nonzero(combined_mask)
+            ) / combined_mask.size
         else:
             filtered_image = original_bgr.copy()
         
         self.total_frames_processed += 1
         
         return filtered_image, combined_mask, detections
+
+    @staticmethod
+    def _cuda_sync() -> None:
+        """Synchronize CUDA so wall-clock timing reflects GPU work (no-op on CPU)."""
+        if TORCH_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.synchronize()
     
     def _apply_mask(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """
@@ -376,14 +398,31 @@ class DynamicObjectFilter:
         self.masking_strategy = strategy
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get processing statistics."""
+        """Get processing statistics (including timing for benchmarking)."""
+        frames = self.total_frames_processed
+        times = np.asarray(self.inference_times, dtype=np.float64)
+        mean_t = float(times.mean()) if times.size else 0.0
         return {
-            "total_frames_processed": self.total_frames_processed,
+            "total_frames_processed": frames,
             "total_detections": self.total_detections,
             "avg_detections_per_frame": (
-                self.total_detections / self.total_frames_processed 
-                if self.total_frames_processed > 0 else 0
+                self.total_detections / frames if frames > 0 else 0
             ),
+            "frames_with_detections": self.frames_with_detections,
+            "detection_rate": (
+                self.frames_with_detections / frames if frames > 0 else 0
+            ),
+            "avg_masked_pixel_ratio": (
+                self.total_masked_pixel_ratio / frames if frames > 0 else 0
+            ),
+            # Inference timing / throughput.
+            "inference_count": int(times.size),
+            "inference_fps": (1.0 / mean_t) if mean_t > 0 else 0.0,
+            "inference_mean_ms": mean_t * 1e3,
+            "inference_median_ms": (float(np.median(times)) * 1e3) if times.size else 0.0,
+            "inference_p95_ms": (float(np.percentile(times, 95)) * 1e3) if times.size else 0.0,
+            "inference_min_ms": (float(times.min()) * 1e3) if times.size else 0.0,
+            "inference_max_ms": (float(times.max()) * 1e3) if times.size else 0.0,
             "device": self.device,
             "model_loaded": self._model_loaded,
             "dynamic_classes": self.dynamic_classes,
@@ -395,6 +434,9 @@ class DynamicObjectFilter:
         """Reset processing statistics."""
         self.total_frames_processed = 0
         self.total_detections = 0
+        self.frames_with_detections = 0
+        self.total_masked_pixel_ratio = 0.0
+        self.inference_times.clear()
 
 
 def create_visualization(

@@ -1,0 +1,6 @@
+# Metrics toolkit dependencies (offline analysis; separate from the ROS 2 build).
+# All are optional-friendly: missing GPU/psutil libs degrade gracefully to null fields.
+numpy>=1.21
+psutil>=5.9          # CPU/RAM sampling
+nvidia-ml-py>=12.0   # provides the `pynvml` module for GPU sampling (NVML)
+matplotlib>=3.5      # optional: trajectory/error plots

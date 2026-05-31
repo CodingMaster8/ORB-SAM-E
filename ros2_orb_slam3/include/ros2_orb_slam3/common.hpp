@@ -80,6 +80,7 @@ class MonocularMode : public rclcpp::Node
         std::string pubconfigackName = ""; // Publisher topic name
         std::string subImgMsgName = ""; // Topic to subscribe to receive RGB images from a python node
         std::string subTimestepMsgName = ""; // Topic to subscribe to receive the timestep related to the 
+        std::string trajectoryOutputPath = ""; // If set, keyframe trajectory (TUM format) is saved here on shutdown
 
         //* Definitions of publisher and subscribers
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr expConfig_subscription_;

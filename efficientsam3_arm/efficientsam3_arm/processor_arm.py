@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import PIL
 import torch
+import torch.nn.functional as F_torch
 from torchvision.transforms import v2
 
 # Use our standalone ARM implementations instead of sam3 modules
@@ -33,6 +34,9 @@ class Sam3ProcessorARM:
         confidence_threshold: Minimum confidence score for detections (default: 0.5)
         use_fp16: Whether to use FP16 precision (default: False, not recommended for MPS)
         optimize_for_inference: Whether to apply inference optimizations (default: True)
+        preserve_aspect_ratio: If True, resize preserving aspect ratio and pad to
+            square instead of squishing. Greatly improves results on images whose
+            native resolution is much smaller than ``resolution`` (default: True).
     """
 
     def __init__(
@@ -43,12 +47,14 @@ class Sam3ProcessorARM:
         confidence_threshold: float = 0.5,
         use_fp16: bool = False,
         optimize_for_inference: bool = True,
+        preserve_aspect_ratio: bool = True,
     ):
         self.model = model
         self.resolution = resolution
         self.device = device
         self.confidence_threshold = confidence_threshold
         self.use_fp16 = use_fp16 and device != "mps"  # FP16 not stable on MPS
+        self.preserve_aspect_ratio = preserve_aspect_ratio
         
         # Move model to device
         self.model = self.model.to(device)
@@ -58,7 +64,7 @@ class Sam3ProcessorARM:
         if optimize_for_inference:
             self._optimize_model()
         
-        # Setup image transforms
+        # Setup image transforms (used when preserve_aspect_ratio=False)
         self.transform = v2.Compose(
             [
                 v2.ToDtype(torch.uint8, scale=True),
@@ -78,6 +84,56 @@ class Sam3ProcessorARM:
             input_points=None,
             input_points_mask=None,
         )
+
+    def _preprocess_with_padding(self, image_tensor):
+        """Resize preserving aspect ratio and pad to square resolution.
+
+        Args:
+            image_tensor: ``(C, H, W)`` tensor (uint8 expected).
+
+        Returns:
+            Tuple of ``(preprocessed C×H×W float32 tensor, padding info dict)``.
+        """
+        if image_tensor.dtype != torch.uint8:
+            if image_tensor.is_floating_point():
+                image_tensor = (image_tensor * 255).clamp(0, 255).to(torch.uint8)
+            else:
+                image_tensor = image_tensor.to(torch.uint8)
+
+        _, h, w = image_tensor.shape
+
+        scale = self.resolution / max(h, w)
+        new_h = min(int(round(h * scale)), self.resolution)
+        new_w = min(int(round(w * scale)), self.resolution)
+
+        image_tensor = v2.functional.resize(image_tensor, [new_h, new_w], antialias=True)
+
+        image_tensor = image_tensor.to(torch.float32) / 255.0
+        image_tensor = v2.functional.normalize(
+            image_tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]
+        )
+
+        pad_h = self.resolution - new_h
+        pad_w = self.resolution - new_w
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        image_tensor = F_torch.pad(
+            image_tensor,
+            (pad_left, pad_right, pad_top, pad_bottom),
+            mode="constant",
+            value=0.0,
+        )
+
+        pad_info = {
+            "pad_top": pad_top,
+            "pad_left": pad_left,
+            "resized_h": new_h,
+            "resized_w": new_w,
+        }
+        return image_tensor, pad_info
 
     def _optimize_model(self):
         """Apply ARM-specific optimizations to the model."""
@@ -141,12 +197,18 @@ class Sam3ProcessorARM:
 
         # Convert and transform image
         image = v2.functional.to_image(image).to(self.device)
-        
-        # Apply FP16 if enabled
-        if self.use_fp16:
-            image = image.half()
-        
-        image = self.transform(image).unsqueeze(0)
+
+        if self.preserve_aspect_ratio:
+            image, pad_info = self._preprocess_with_padding(image)
+            if self.use_fp16:
+                image = image.half()
+            image = image.unsqueeze(0)
+            state["pad_info"] = pad_info
+        else:
+            if self.use_fp16:
+                image = image.half()
+            image = self.transform(image).unsqueeze(0)
+            state["pad_info"] = None
 
         # Store original dimensions
         state["original_height"] = height
@@ -195,23 +257,45 @@ class Sam3ProcessorARM:
         state["original_widths"] = []
         
         transformed_images = []
-        for image in images:
-            if isinstance(image, PIL.Image.Image):
-                width, height = image.size
-            elif isinstance(image, np.ndarray):
-                height, width = image.shape[:2]
-            else:
-                raise ValueError("Each image must be a PIL Image or numpy array")
-            
-            state["original_heights"].append(height)
-            state["original_widths"].append(width)
-            
-            # Transform image
-            img_tensor = v2.functional.to_image(image).to(self.device)
-            if self.use_fp16:
-                img_tensor = img_tensor.half()
-            transformed_images.append(self.transform(img_tensor))
-        
+
+        if self.preserve_aspect_ratio:
+            pad_infos = []
+            for image in images:
+                if isinstance(image, PIL.Image.Image):
+                    width, height = image.size
+                elif isinstance(image, np.ndarray):
+                    height, width = image.shape[:2]
+                else:
+                    raise ValueError("Each image must be a PIL Image or numpy array")
+
+                state["original_heights"].append(height)
+                state["original_widths"].append(width)
+
+                img_tensor = v2.functional.to_image(image).to(self.device)
+                img_tensor, pad_info = self._preprocess_with_padding(img_tensor)
+                if self.use_fp16:
+                    img_tensor = img_tensor.half()
+                transformed_images.append(img_tensor)
+                pad_infos.append(pad_info)
+            state["pad_infos"] = pad_infos
+        else:
+            for image in images:
+                if isinstance(image, PIL.Image.Image):
+                    width, height = image.size
+                elif isinstance(image, np.ndarray):
+                    height, width = image.shape[:2]
+                else:
+                    raise ValueError("Each image must be a PIL Image or numpy array")
+
+                state["original_heights"].append(height)
+                state["original_widths"].append(width)
+
+                img_tensor = v2.functional.to_image(image).to(self.device)
+                if self.use_fp16:
+                    img_tensor = img_tensor.half()
+                transformed_images.append(self.transform(img_tensor))
+            state["pad_infos"] = None
+
         # Stack into batch
         images_batch = torch.stack(transformed_images, dim=0)
         
@@ -291,6 +375,19 @@ class Sam3ProcessorARM:
 
         # Add box prompt
         boxes = torch.tensor(box, device=self.device, dtype=torch.float32).view(1, 1, 4)
+
+        # Convert from original [0,1] to padded [0,1] coordinate space
+        pad_info = state.get("pad_info")
+        if pad_info is not None:
+            content_w_frac = pad_info["resized_w"] / self.resolution
+            content_h_frac = pad_info["resized_h"] / self.resolution
+            pad_left_frac = pad_info["pad_left"] / self.resolution
+            pad_top_frac = pad_info["pad_top"] / self.resolution
+            boxes[..., 0] = boxes[..., 0] * content_w_frac + pad_left_frac  # cx
+            boxes[..., 1] = boxes[..., 1] * content_h_frac + pad_top_frac   # cy
+            boxes[..., 2] = boxes[..., 2] * content_w_frac                  # w
+            boxes[..., 3] = boxes[..., 3] * content_h_frac                  # h
+
         labels = torch.tensor([label], device=self.device, dtype=torch.bool).view(1, 1)
         state["geometric_prompt"].append_boxes(boxes, labels)
 
@@ -376,19 +473,54 @@ class Sam3ProcessorARM:
         # Convert boxes to [x0, y0, x1, y1] format
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
 
-        # Scale boxes to original image size
         img_h = state["original_height"]
         img_w = state["original_width"]
+
+        pad_info = state.get("pad_info")
+        if pad_info is not None:
+            # Boxes are in [0,1] relative to the padded resolution×resolution image.
+            # Convert to [0,1] relative to the actual image content.
+            pad_left_frac = pad_info["pad_left"] / self.resolution
+            pad_top_frac = pad_info["pad_top"] / self.resolution
+            content_w_frac = pad_info["resized_w"] / self.resolution
+            content_h_frac = pad_info["resized_h"] / self.resolution
+
+            boxes[:, 0] = (boxes[:, 0] - pad_left_frac) / content_w_frac
+            boxes[:, 1] = (boxes[:, 1] - pad_top_frac) / content_h_frac
+            boxes[:, 2] = (boxes[:, 2] - pad_left_frac) / content_w_frac
+            boxes[:, 3] = (boxes[:, 3] - pad_top_frac) / content_h_frac
+            boxes = boxes.clamp(0, 1)
+
+        # Scale to original pixel coordinates
         scale_fct = torch.tensor([img_w, img_h, img_w, img_h], device=self.device)
         boxes = boxes * scale_fct[None, :]
 
-        # Resize masks to original image size
-        out_masks = interpolate(
-            out_masks.unsqueeze(1),
-            (img_h, img_w),
-            mode="bilinear",
-            align_corners=False,
-        ).sigmoid()
+        if pad_info is not None:
+            # Masks: interpolate to padded resolution, crop padding, resize to original
+            out_masks = interpolate(
+                out_masks.unsqueeze(1),
+                (self.resolution, self.resolution),
+                mode="bilinear",
+                align_corners=False,
+            ).sigmoid()
+            pt = pad_info["pad_top"]
+            pl = pad_info["pad_left"]
+            rh = pad_info["resized_h"]
+            rw = pad_info["resized_w"]
+            out_masks = out_masks[:, :, pt : pt + rh, pl : pl + rw]
+            out_masks = interpolate(
+                out_masks,
+                (img_h, img_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+        else:
+            out_masks = interpolate(
+                out_masks.unsqueeze(1),
+                (img_h, img_w),
+                mode="bilinear",
+                align_corners=False,
+            ).sigmoid()
 
         # Store results in state
         state["masks_logits"] = out_masks

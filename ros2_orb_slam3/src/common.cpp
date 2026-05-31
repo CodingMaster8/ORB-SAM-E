@@ -35,6 +35,9 @@ MonocularMode::MonocularMode() :Node("mono_node_cpp")
     this->declare_parameter("use_filtered_images", false); // Set true to use filtered images from EfficientSAM3
     this->declare_parameter("image_topic", "/mono_py_driver/img_msg"); // Topic for image input
     this->declare_parameter("timestep_topic", "/mono_py_driver/timestep_msg"); // Topic for timestep input  
+    // If set, the estimated keyframe trajectory (TUM format) is written here on shutdown,
+    // enabling offline ATE/RPE evaluation against the dataset groundtruth.
+    this->declare_parameter("trajectory_output", "");
     
     //* Watchdog, populate default values
     nodeName = "not_set";
@@ -60,6 +63,9 @@ MonocularMode::MonocularMode() :Node("mono_node_cpp")
     
     rclcpp::Parameter param_ts_topic = this->get_parameter("timestep_topic");
     std::string tsTopicParam = param_ts_topic.as_string();
+
+    rclcpp::Parameter param_traj_out = this->get_parameter("trajectory_output");
+    trajectoryOutputPath = param_traj_out.as_string();
     
   
     //* HARDCODED, set paths
@@ -124,9 +130,28 @@ MonocularMode::~MonocularMode()
 {   
     
     // Stop all threads
-    // Call method to write the trajectory file
     // Release resources and cleanly shutdown
-    pAgent->Shutdown();
+    if (pAgent != nullptr)
+    {
+        pAgent->Shutdown();
+
+        // Save the estimated keyframe trajectory (TUM format) for offline
+        // ATE/RPE evaluation against groundtruth. Monocular mode must use the
+        // keyframe trajectory (SaveTrajectoryTUM is not valid for monocular).
+        if (!trajectoryOutputPath.empty())
+        {
+            try
+            {
+                pAgent->SaveKeyFrameTrajectoryTUM(trajectoryOutputPath);
+                std::cout << "Saved keyframe trajectory to: "
+                          << trajectoryOutputPath << std::endl;
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "Failed to save trajectory: " << e.what() << std::endl;
+            }
+        }
+    }
     pass;
 
 }

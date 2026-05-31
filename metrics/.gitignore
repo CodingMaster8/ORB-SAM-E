@@ -1,0 +1,7 @@
+# Benchmark run outputs
+results/
+*.csv
+KeyFrameTrajectory.txt
+CameraTrajectory.txt
+__pycache__/
+*.pyc
