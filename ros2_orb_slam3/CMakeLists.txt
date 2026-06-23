@@ -19,6 +19,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 # find_package(your_custom_msg_interface REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV 4.2 REQUIRED)
@@ -51,6 +52,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclpy
   std_msgs
   sensor_msgs
+  geometry_msgs
   # your_custom_msg_interface
   cv_bridge
   image_transport
@@ -200,7 +202,13 @@ install(PROGRAMS
   scripts/mono_driver_node.py
   scripts/mono_driver_filtered_node.py
   scripts/tum_driver_node.py
+  scripts/live_camera_driver_node.py
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Launch files (live on-robot operation)
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 

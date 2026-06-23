@@ -224,8 +224,18 @@ def _create_student_vision_backbone(
     )
     return vit_neck
 
-def _create_student_text_encoder(bpe_path: str, backbone_type: str) -> TextStudentEncoder:
-    """Create Student text encoder."""
+def _create_student_text_encoder(
+    bpe_path: str,
+    backbone_type: str,
+    context_length: int = 32,
+    pos_embed_table_size: int = None,
+) -> TextStudentEncoder:
+    """Create Student text encoder.
+
+    Legacy checkpoints (stage1_all_converted) use a 77-entry positional table with
+    ctx=32 tokenization. SAM3.1 "fixed" checkpoints (e.g. *_ctx16) store a table
+    whose size equals the training context; pass pos_embed_table_size for those.
+    """
     
     # Default config values
     cfg = {
@@ -273,9 +283,12 @@ def _create_student_text_encoder(bpe_path: str, backbone_type: str) -> TextStude
             "model_name": "base", 
         })
     
+    if pos_embed_table_size:
+        cfg["context_length"] = int(pos_embed_table_size)
+
     return TextStudentEncoder(
         cfg=cfg,
-        context_length=32, # Match teacher input length
+        context_length=context_length,
         output_dim=256, # SAM3 d_model
         bpe_path=bpe_path
     )
@@ -678,6 +691,15 @@ def _load_checkpoint(model, checkpoint_path, device="cpu"):
     sam3_image_ckpt = {
         k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k
     }
+    # SAM3.1 checkpoints name the SAM2-task neck convs "interactive_convs";
+    # our DualNeck calls them "sam2_convs". Keep both spellings (strict=False).
+    for k in list(sam3_image_ckpt.keys()):
+        if "backbone.vision_backbone.interactive_convs." in k:
+            nk = k.replace(
+                "backbone.vision_backbone.interactive_convs.",
+                "backbone.vision_backbone.sam2_convs.",
+            )
+            sam3_image_ckpt.setdefault(nk, sam3_image_ckpt[k])
     if model.inst_interactive_predictor is not None:
         sam3_image_ckpt.update(
             {
@@ -738,6 +760,10 @@ def build_efficientsam3_image_model(
     # Legacy argument support
     efficientvit_model=None,
     text_encoder_type=None, # e.g. "MobileCLIP-S0"
+    # SAM3.1 fixed-context checkpoints (e.g. *_ctx16): table size == context length.
+    # Defaults preserve legacy behavior (77-entry table, ctx=32 tokenization).
+    text_encoder_context_length=32,
+    text_encoder_pos_embed_table_size=None,
 ):
     """
     Build EfficientSAM3 image model with a student backbone
@@ -788,7 +814,12 @@ def build_efficientsam3_image_model(
 
     # Create text components
     if text_encoder_type:
-        text_encoder = _create_student_text_encoder(bpe_path, text_encoder_type)
+        text_encoder = _create_student_text_encoder(
+            bpe_path,
+            text_encoder_type,
+            context_length=text_encoder_context_length,
+            pos_embed_table_size=text_encoder_pos_embed_table_size,
+        )
     else:
         raise ValueError("text_encoder_type must be specified for EfficientSAM3 student model.")
         # Weight of MobileClip are already released, so is better to nor rely on the standard text encoder.

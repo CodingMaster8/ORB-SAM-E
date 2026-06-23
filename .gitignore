@@ -157,3 +157,21 @@ sam3_checkpoints/*
 !sam3
 personal-site
 sam3_checkpoints
+
+# ----------------------------------------------------------------------------
+# ORB-SAM-E experiment outputs (eval_runs/) and shareable media (media/)
+# Policy: keep analysis scripts, READMEs, and small text results (.tum / .json /
+# small .ply maps) tracked; ignore heavy binaries (raw rosbags, COLMAP DBs,
+# Gaussian-splat reconstructions, partial rsync transfers). PDFs/PNGs/MP4s are
+# already ignored globally above; .pdf is added here for completeness.
+# ----------------------------------------------------------------------------
+*.pdf
+
+# Raw recorded camera rosbags (large) and any partial rsync transfers under them
+eval_runs/bags/
+
+# Gaussian-splat / COLMAP reconstruction outputs (large, derived)
+eval_runs/**/gsplat/
+
+# rsync partial-transfer temp files for rosbags (e.g. .dyn1_0.db3.XXXXXX)
+.*.db3.*

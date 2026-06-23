@@ -208,6 +208,25 @@ ros2 run rqt_image_view rqt_image_view /camera/image_filtered
 ros2 run rqt_image_view rqt_image_view /dynamic_filter/mask
 ```
 
+## Offline tools (rosbag)
+
+Two helpers run the filter over a recorded `rosbag2` to produce qualitative
+evidence (no live pipeline needed). Run them inside the torch venv:
+
+```bash
+# Side-by-side overlays (original | mask | filtered) as PNGs
+python3 -m efficientsam3_ros2.bag_detection_overlays \
+    --bag ~/runs/bags/move2 --out ~/runs/move2_overlays --start 80 --end 200 --every 60
+
+# 3-panel comparison video [ original | detection overlay | grayout ] as MP4
+# (the right panel is exactly what SLAM receives; inference runs every --infer-every
+#  frames and reuses the latest mask in between, like the live worker-thread node)
+python3 -m efficientsam3_ros2.bag_filter_video --bag ~/runs/bags/dyn1 --out ~/runs/dyn1_filter.mp4
+```
+
+See each script's `--help` for all options. Outputs feed the figures/videos in
+`media/` and `eval_runs/`.
+
 ## Performance Tips
 
 1. **Use smaller model**: RepViT-S (4.72M params) is fastest

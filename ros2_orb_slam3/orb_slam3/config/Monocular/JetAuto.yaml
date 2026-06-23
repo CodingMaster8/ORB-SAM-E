@@ -1,0 +1,67 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# JetAuto robot — Orbbec Astra Pro Plus, RGB only, 640x480 @ 30 fps (MJPG).
+#
+# Intrinsics/distortion taken from the camera's FACTORY calibration as published on
+# /cam_1/camera_info (distortion_model: rational_polynomial with k4=k5=k6=0, which
+# reduces to plumb_bob k1,k2,p1,p2,k3). Replace with a checkerboard calibration if
+# reprojection quality turns out to be a limiting factor.
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+# Camera calibration and distortion parameters (OpenCV)
+Camera1.fx: 539.1278076171875
+Camera1.fy: 539.1278076171875
+Camera1.cx: 320.458251953125
+Camera1.cy: 240.0159454345703
+
+Camera1.k1: 0.13392946124076843
+Camera1.k2: -0.2676388621330261
+Camera1.p1: 0.0025758773554116488
+Camera1.p2: 0.00267409672960639
+Camera1.k3: 0.14543378353118896
+
+# Camera frames per second
+Camera.fps: 30
+
+# Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
+# The Orbbec ROS driver publishes rgb8 on /cam_1/image.
+Camera.RGB: 1
+
+# Camera resolution
+Camera.width: 640
+Camera.height: 480
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+
+# ORB Extractor: Number of features per image
+ORBextractor.nFeatures: 1000
+
+# ORB Extractor: Scale factor between levels in the scale pyramid
+ORBextractor.scaleFactor: 1.2
+
+# ORB Extractor: Number of levels in the scale pyramid
+ORBextractor.nLevels: 8
+
+# ORB Extractor: Fast threshold
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters (only used with use_viewer:=true)
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0

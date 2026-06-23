@@ -33,6 +33,7 @@ Author: Generated for EfficientSAM3 + ROS2 ORB-SLAM3 integration
 """
 
 import json
+import threading
 from typing import Optional
 
 import numpy as np
@@ -82,6 +83,7 @@ class DynamicFilterNode(Node):
         self.process_every_n_frames = self.get_parameter('process_every_n_frames').value
         self.num_threads = self.get_parameter('num_threads').value
         self.metrics_output = self.get_parameter('metrics_output').value
+        self.use_fp16 = self.get_parameter('use_fp16').value
         
         # Validate model path
         if not self.model_path:
@@ -113,6 +115,7 @@ class DynamicFilterNode(Node):
         self.get_logger().info(f"  Input topic: {self.input_topic}")
         self.get_logger().info(f"  Output topic: {self.output_topic}")
         self.get_logger().info(f"  Process every N frames: {self.process_every_n_frames}")
+        self.get_logger().info(f"  fp16 autocast: {self.use_fp16}")
         self.get_logger().info(f"  Num prompts: {len(self.dynamic_prompts)}")
         self.get_logger().info(f"  CPU threads: {self.num_threads if self.num_threads > 0 else 'auto'}")
         self.get_logger().info("=" * 60)
@@ -133,6 +136,7 @@ class DynamicFilterNode(Node):
             backbone_type=self.backbone_type,
             model_name=self.model_name,
             num_threads=self.num_threads,
+            use_fp16=self.use_fp16,
         )
         
         # Eagerly load the model NOW so the first frame isn't blocked by cold start
@@ -140,11 +144,23 @@ class DynamicFilterNode(Node):
         self.filter.ensure_model_loaded()
         self.get_logger().info("Model ready!")
         
-        # Frame counter for skip logic
+        # Frame counter + async inference state.
+        # The image callback never blocks on the GPU: it applies the latest
+        # available mask and republishes at full camera rate, while a worker
+        # thread keeps refreshing the mask on the newest frame.
         self.frame_count = 0
-        self.last_mask: Optional[np.ndarray] = None
-        self.skipped_frames = 0
-        self.reused_frames = 0
+        self.last_mask: Optional[np.ndarray] = None  # replaced by reference swap (atomic under GIL)
+        self.skipped_frames = 0   # passthrough frames published with no mask available
+        self.reused_frames = 0    # frames published with a (possibly stale) mask
+        self._latest_frame = None  # newest (cv_image, header) awaiting inference
+        self._frame_lock = threading.Lock()
+        self._new_frame_evt = threading.Event()
+        self._stop_evt = threading.Event()
+        self._last_inferred_frame = 0
+        self._infer_thread = threading.Thread(
+            target=self._inference_loop, name="esam3_inference", daemon=True
+        )
+        self._infer_thread.start()
         
         # Set up QoS profile for image topics
         image_qos = QoSProfile(
@@ -216,10 +232,12 @@ class DynamicFilterNode(Node):
         # If set, filtering/timing stats are written here (JSON) on shutdown.
         self.declare_parameter('metrics_output', '')
         self.declare_parameter('num_threads', 0)  # 0 = PyTorch default
+        self.declare_parameter('use_fp16', False)  # fp16 autocast on CUDA (~1.9x on Orin)
     
     def image_callback(self, msg: Image):
         """
-        Callback for incoming camera images.
+        Fast path: every camera frame is republished immediately with the latest
+        available mask applied. GPU inference never runs here (see _inference_loop).
         
         Args:
             msg: ROS2 Image message
@@ -233,41 +251,21 @@ class DynamicFilterNode(Node):
             self.get_logger().error(f"CV Bridge error: {e}")
             return
         
-        # Process first frame immediately, then every N-th frame after that
-        should_process = (
-            self.frame_count == 1  # always process the very first frame
-            or (self.frame_count % self.process_every_n_frames) == 0
-        )
+        # Hand the newest frame to the inference worker (it always takes the latest).
+        with self._frame_lock:
+            self._latest_frame = (cv_image, msg.header)
+        self._new_frame_evt.set()
         
-        if should_process:
-            # Run full inference
-            self.get_logger().debug(
-                f"Frame {self.frame_count}: running full inference"
-            )
-            filtered_image, mask, detections = self.filter.process_frame(cv_image)
-            self.last_mask = mask
-            
-            # Publish detections info if enabled
-            if self.detections_pub is not None and detections:
-                det_msg = String()
-                det_msg.data = json.dumps([
-                    {
-                        'confidence': d.confidence,
-                        'bbox': list(d.bbox),
-                    }
-                    for d in detections
-                ])
-                self.detections_pub.publish(det_msg)
+        # Apply the most recent mask (possibly a few frames stale - dynamic objects
+        # move little in ~0.6s at robot speeds) and publish at full camera rate.
+        mask = self.last_mask
+        if mask is not None and mask.any():
+            filtered_image = self.filter._apply_mask(cv_image, mask)
+            self.reused_frames += 1
         else:
-            # Reuse last mask for faster processing
-            if self.last_mask is not None and self.last_mask.any():
-                filtered_image = self.filter._apply_mask(cv_image, self.last_mask)
-                mask = self.last_mask
-                self.reused_frames += 1
-            else:
-                filtered_image = cv_image
-                mask = None
-                self.skipped_frames += 1
+            filtered_image = cv_image
+            mask = None
+            self.skipped_frames += 1
         
         # Publish filtered image
         try:
@@ -288,14 +286,59 @@ class DynamicFilterNode(Node):
             except CvBridgeError as e:
                 self.get_logger().error(f"Error publishing mask: {e}")
     
+    def _inference_loop(self):
+        """Worker thread: run EfficientSAM3 on the newest frame, refresh the mask.
+        
+        Runs as fast as the GPU allows (~0.6s/frame on the Orin with fp16);
+        process_every_n_frames additionally enforces a minimum number of camera
+        frames between inferences (useful to cap GPU load alongside SLAM).
+        """
+        while not self._stop_evt.is_set():
+            if not self._new_frame_evt.wait(timeout=0.2):
+                continue
+            self._new_frame_evt.clear()
+            
+            # Throttle: require N new camera frames since the last inference.
+            if (self.frame_count - self._last_inferred_frame) < self.process_every_n_frames:
+                continue
+            
+            with self._frame_lock:
+                frame = self._latest_frame
+                self._latest_frame = None
+            if frame is None:
+                continue
+            
+            cv_image, header = frame
+            self._last_inferred_frame = self.frame_count
+            try:
+                _, mask, detections = self.filter.process_frame(cv_image)
+            except Exception as e:
+                self.get_logger().error(f"Inference error: {e}")
+                continue
+            
+            # Atomic reference swap; the callback picks it up on the next frame.
+            self.last_mask = mask
+            
+            # Publish detections info if enabled
+            if self.detections_pub is not None and detections:
+                det_msg = String()
+                det_msg.data = json.dumps([
+                    {
+                        'confidence': d.confidence,
+                        'bbox': list(d.bbox),
+                    }
+                    for d in detections
+                ])
+                self.detections_pub.publish(det_msg)
+    
     def log_stats(self):
         """Periodically log processing statistics."""
         stats = self.filter.get_stats()
         self.get_logger().info(
             f"Stats: received={self.frame_count}, "
-            f"inferred={stats['total_frames_processed']}, "
-            f"reused={self.reused_frames}, "
-            f"skipped(no mask)={self.skipped_frames}, "
+            f"inferred={stats['total_frames_processed']} (async), "
+            f"published_with_mask={self.reused_frames}, "
+            f"published_no_mask={self.skipped_frames}, "
             f"detections={stats['total_detections']}, "
             f"avg_det/frame={stats['avg_detections_per_frame']:.2f}, "
             f"inference={stats['inference_fps']:.1f} FPS "
@@ -333,6 +376,8 @@ def main(args=None):
         traceback.print_exc()
     finally:
         if node is not None:
+            node._stop_evt.set()
+            node._infer_thread.join(timeout=5.0)
             node.write_metrics()
         rclpy.shutdown()
 

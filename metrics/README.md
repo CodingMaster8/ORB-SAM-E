@@ -84,6 +84,29 @@ Environment snapshot:
 python3 -m slam_metrics.env_info
 ```
 
+## On-robot (live) capture
+
+The benchmark above replays a dataset; on the real robot (Jetson Orin) use the
+live tools instead. They record what's needed to compute ATE/RPE against ground
+truth **and** to re-run the same sequence offline (baseline vs filtered).
+
+```bash
+# One-shot orchestrator: rosbag (camera+poses+GT+tf) + TUM logger + resource monitor.
+# Run while the live SLAM pipeline is already up (orbsame_live.launch.py).
+./record_eval_run.sh run1                 # records until Ctrl-C (or pass duration_s)
+
+# Or the pieces directly (need the robot's CycloneDDS env exported first):
+python3 -m slam_metrics.live_eval_logger --out-dir ~/eval_runs/run1   # est/gt/odom -> TUM
+python3 -m slam_metrics.topic_fps --duration 30 --out fps.json \
+    --filtered-topic /camera/image_filtered                            # camera/filter/SLAM FPS
+```
+
+`live_eval_logger` writes `est.tum` / `gt.tum` / `odom.tum` on a single clock,
+ready for `trajectory_eval` (Sim3 for monocular) or `evo`. See
+[`../docs/ROBOT_INTEGRATION_TODO.md`](../docs/ROBOT_INTEGRATION_TODO.md) for the
+full robot benchmark protocol and [`../eval_runs/`](../eval_runs/) for recorded
+outputs and the offline A/B analysis.
+
 ## How metric collection is wired into the pipeline
 
 - **`filter_core.py`** times each EfficientSAM3 inference (with CUDA sync) and
@@ -105,6 +128,8 @@ python3 -m slam_metrics.env_info
 | `slam_metrics/env_info.py` | hardware/software environment capture |
 | `slam_metrics/assemble.py` | combine all parts → one `results.json` |
 | `slam_metrics/report.py` | render `results.json` files → Markdown comparison |
+| `slam_metrics/live_eval_logger.py` | **on-robot**: log live est/gt/odom → TUM on a single clock (for live ATE/RPE vs ground truth) |
+| `slam_metrics/topic_fps.py` | **on-robot**: measure camera vs filter vs SLAM-pose FPS over a window → JSON (the three paper FPS numbers) |
 
 ## Suggested experiment matrix for the paper
 

@@ -279,55 +279,43 @@ class DynamicObjectFilter:
             pil_image = image
             original_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Multi-prompt union detection:
-        # MobileCLIP-S1 responds poorly to generic class names like "person".
-        # Instead, we run multiple body-part prompts and union all masks.
-        # set_image() is called once; each prompt reuses the image embedding.
-        h, w = original_bgr.shape[:2]
-        combined_mask = np.zeros((h, w), dtype=np.uint8)
-        detections = []
-
-        # Run inference (timed). Synchronize CUDA so GPU timing is accurate.
-        self._cuda_sync()
-        _t_start = time.perf_counter()
+        # Run inference
         state = self._processor.set_image(pil_image)
+        state = self._processor.set_text_prompt(self._text_prompt, state)
         
-        for prompt in self.dynamic_prompts:
-            self._processor.reset_all_prompts(state)
-            state = self._processor.set_text_prompt(state=state, prompt=prompt)
+        # Extract detections
+        detections = []
+        combined_mask = None
+        
+        if "masks" in state and state["masks"] is not None and len(state["masks"]) > 0:
+            masks = state["masks"].cpu().numpy()
+            boxes = state["boxes"].cpu().numpy()
+            scores = state["scores"].cpu().numpy()
             
-            if "boxes" in state and len(state["boxes"]) > 0:
-                masks = state["masks"].cpu().numpy()
-                boxes = state["boxes"].cpu().numpy()
-                scores = state["scores"].cpu().numpy()
+            # Remove channel dimension if present
+            if masks.ndim == 4:
+                masks = masks.squeeze(1)
+            
+            h, w = original_bgr.shape[:2]
+            combined_mask = np.zeros((h, w), dtype=np.uint8)
+            
+            for i in range(len(scores)):
+                # Create detection object
+                detection = Detection(
+                    class_name="dynamic_object",  # EfficientSAM3 doesn't provide class names
+                    confidence=float(scores[i]),
+                    bbox=tuple(boxes[i].tolist()),
+                    mask=masks[i] > 0.5,
+                )
+                detections.append(detection)
                 
-                for i in range(len(scores)):
-                    mask_raw = masks[i]
-                    # Remove channel dimension if present (shape: [1, H, W] -> [H, W])
-                    if mask_raw.ndim == 3:
-                        mask_raw = mask_raw[0]
-                    
-                    mask_binary = (mask_raw > 0.5).astype(np.uint8)
-                    # Resize mask to image size if needed
-                    if mask_binary.shape != (h, w):
-                        mask_binary = cv2.resize(mask_binary, (w, h), interpolation=cv2.INTER_NEAREST)
-                    
-                    # Union into combined mask
-                    combined_mask = np.maximum(combined_mask, mask_binary)
-                    
-                    detection = Detection(
-                        class_name=prompt,
-                        confidence=float(scores[i]),
-                        bbox=tuple(boxes[i].tolist()),
-                        mask=mask_binary.astype(bool),
-                    )
-                    detections.append(detection)
-
-        # Stop the inference timer once all prompts have been processed.
-        self._cuda_sync()
-        self.inference_times.append(time.perf_counter() - _t_start)
-
-        if detections:
+                # Add to combined mask
+                mask_binary = (masks[i] > 0.5).astype(np.uint8)
+                # Resize mask to image size if needed
+                if mask_binary.shape != (h, w):
+                    mask_binary = cv2.resize(mask_binary, (w, h), interpolation=cv2.INTER_NEAREST)
+                combined_mask = np.maximum(combined_mask, mask_binary)
+            
             self.total_detections += len(detections)
         
         # Apply masking strategy

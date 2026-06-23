@@ -1,0 +1,22 @@
+{
+  "total_frames_processed": 158,
+  "total_detections": 148,
+  "avg_detections_per_frame": 0.9367088607594937,
+  "frames_with_detections": 61,
+  "detection_rate": 0.3860759493670886,
+  "avg_masked_pixel_ratio": 0.030780158063027432,
+  "inference_count": 158,
+  "inference_fps": 0.7942115279099606,
+  "inference_mean_ms": 1259.110406810123,
+  "inference_median_ms": 1236.5738755001985,
+  "inference_p95_ms": 1320.4204126001969,
+  "inference_min_ms": 1195.3395410000667,
+  "inference_max_ms": 3301.681887000086,
+  "device": "cuda",
+  "model_loaded": true,
+  "dynamic_classes": [
+    "person"
+  ],
+  "confidence_threshold": 0.3,
+  "masking_strategy": "grayout"
+}

@@ -26,6 +26,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include "sensor_msgs/msg/image.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp" //* Camera pose output (for eval/downstream)
 using std::placeholders::_1; //* TODO why this is suggested in official tutorial
 
 // Include Eigen
@@ -33,7 +34,9 @@ using std::placeholders::_1; //* TODO why this is suggested in official tutorial
 #include <Eigen/Dense> // Includes Core, Geometry, LU, Cholesky, SVD, QR, and Eigenvalues header file
 
 // Include cv-bridge
-#include <cv_bridge/cv_bridge.hpp>
+// NOTE: ROS 2 Humble ships only cv_bridge/cv_bridge.h (the .hpp variant exists
+// from Iron/Jazzy onward). Use .h so this builds on the robot's Humble install.
+#include <cv_bridge/cv_bridge.h>
 
 // Include OpenCV computer vision library
 #include <opencv2/opencv.hpp>
@@ -81,12 +84,22 @@ class MonocularMode : public rclcpp::Node
         std::string subImgMsgName = ""; // Topic to subscribe to receive RGB images from a python node
         std::string subTimestepMsgName = ""; // Topic to subscribe to receive the timestep related to the 
         std::string trajectoryOutputPath = ""; // If set, keyframe trajectory (TUM format) is saved here on shutdown
+        std::string mapPointsOutputPath = ""; // If set, map points of the active map are saved here (ASCII PLY) on shutdown
 
         //* Definitions of publisher and subscribers
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr expConfig_subscription_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr configAck_publisher_;
         rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subImgMsg_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr subTimestepMsg_subscription_;
+        rclcpp::Subscription<std_msgs::msg::String>::SharedPtr saveTrigger_subscription_; // on-demand save of trajectory + map
+
+        //* Camera pose (Twc) output, published when tracking is OK. Frames are
+        //* ORB-SLAM3-local (poseMapFrame/poseCamFrame), kept separate from the robot's
+        //* map/odom so this never interferes with the EKF/Nav2 TF tree.
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr posePublisher_;
+        std::string poseTopicName = "";
+        std::string poseMapFrame = "";
+        std::string poseCamFrame = "";
 
         //* ORB_SLAM3 related variables
         ORB_SLAM3::System* pAgent; // pointer to a ORB SLAM3 object
@@ -98,6 +111,8 @@ class MonocularMode : public rclcpp::Node
         void experimentSetting_callback(const std_msgs::msg::String& msg); // Callback to process settings sent over by Python node
         void Timestep_callback(const std_msgs::msg::Float64& time_msg); // Callback to process the timestep for this image
         void Img_callback(const sensor_msgs::msg::Image& msg); // Callback to process RGB image and semantic matrix sent by Python node
+        void SaveTrigger_callback(const std_msgs::msg::String& msg); // On-demand dump of trajectory + map points
+        void SaveOutputs(); // Writes trajectory_output (TUM) and map_points_output (PLY) if configured
         
         //* Helper functions
         // ORB_SLAM3::eigenMatXf convertToEigenMat(const std_msgs::msg::Float32MultiArray& msg); // Helper method, converts semantic matrix eigenMatXf, a Eigen 4x4 float matrix
