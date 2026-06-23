@@ -19,6 +19,18 @@ The ORB-SLAM3 node runs unfiltered images (baseline) or filtered images
 (`use_filtered_images:=true`), which makes paired **baseline vs. filtered**
 A/B evaluation the core experiment of the project.
 
+### What the filter does
+
+Each panel below is **left → right: raw camera frame | EfficientSAM3 detections
+(red mask + green boxes with confidence) | grayout output sent to ORB-SLAM3.**
+Dynamic objects are masked out before they can corrupt feature tracking.
+
+![A walking person detected (conf 1.00) and masked out before SLAM](media/frame_t0114.0s_d4.png)
+
+![Several people segmented in a cluttered dynamic scene](media/frame_t0078.0s_d7.png)
+
+*(Frames from a live JetAuto run; rendered with `efficientsam3_ros2/.../bag_filter_video.py`.)*
+
 > **Status (Jun 2026):** the full pipeline runs live on a Jetson Orin Nano
 > (camera → filter → SLAM) and a first round of paired A/B runs is complete.
 > See [`docs/ROBOT_INTEGRATION_TODO.md`](docs/ROBOT_INTEGRATION_TODO.md) for the
@@ -37,7 +49,7 @@ A/B evaluation the core experiment of the project.
 | [`efficientsam3_arm/`](efficientsam3_arm/) | The EfficientSAM3 model code (ARM/edge port) the filter imports. Injected via `sys.path` (`efficientsam3_path`), not pip-installed on the robot. |
 | [`metrics/`](metrics/) | Offline, paper-ready metrics toolkit: ATE/RPE accuracy, FPS/latency, GPU/CPU/RAM, environment capture. See its [README](metrics/README.md). |
 | [`eval_runs/`](eval_runs/) | Experiment outputs (trajectories, maps, metrics) and the offline A/B analysis scripts. Heavy binaries are gitignored — see its [README](eval_runs/README.md). |
-| [`media/`](media/) | Shareable figures/videos/PDF for talks and the paper. Binaries gitignored — see its [README](media/README.md). |
+| [`media/`](media/) | Shareable figures/videos/PDF for talks and the paper. Figures (PNG) are tracked; videos/PDF gitignored — see its [README](media/README.md). |
 | [`docs/`](docs/) | All long-form guides and research notes (see the index below). |
 | `paper/` | LaTeX sources for the validation paper. **Gitignored** (built locally). |
 

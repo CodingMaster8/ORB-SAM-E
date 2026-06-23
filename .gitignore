@@ -162,10 +162,15 @@ sam3_checkpoints
 # ORB-SAM-E experiment outputs (eval_runs/) and shareable media (media/)
 # Policy: keep analysis scripts, READMEs, and small text results (.tum / .json /
 # small .ply maps) tracked; ignore heavy binaries (raw rosbags, COLMAP DBs,
-# Gaussian-splat reconstructions, partial rsync transfers). PDFs/PNGs/MP4s are
-# already ignored globally above; .pdf is added here for completeness.
+# Gaussian-splat reconstructions, partial rsync transfers). PDFs/MP4s are
+# ignored globally above; .pdf is added here for completeness.
 # ----------------------------------------------------------------------------
 *.pdf
+
+# Track the shareable figures/sample frames in media/ (PNGs are ignored globally
+# above; this allowlists just this folder so they are versioned for the README,
+# talks, and the paper). Videos (*.mp4) and the PDF stay ignored.
+!media/*.png
 
 # Raw recorded camera rosbags (large) and any partial rsync transfers under them
 eval_runs/bags/

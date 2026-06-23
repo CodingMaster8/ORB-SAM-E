@@ -3,10 +3,10 @@
 Shareable, presentation-ready outputs for talks, the README, and the paper —
 figures, comparison videos, and the compiled validation PDF.
 
-**The binaries here are gitignored on purpose** (figures `*.png`, videos
-`*.mp4`, and `*.pdf`); only this README is tracked. The files are derived
-artifacts that can be regenerated, so they are kept local rather than bloating
-the repo.
+The **figures and sample frames (`*.png`) are tracked** here so they are
+available for the README, talks, and the paper. The heavier derived artifacts —
+videos (`*.mp4`) and the compiled `*.pdf` — stay gitignored and are regenerated
+locally rather than bloating the repo.
 
 ## Contents (regenerated locally)
 
