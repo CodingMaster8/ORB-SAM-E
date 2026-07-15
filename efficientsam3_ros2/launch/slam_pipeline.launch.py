@@ -12,7 +12,7 @@ Usage:
     
     # With custom model path
     ros2 launch efficientsam3_ros2 slam_pipeline.launch.py \
-        model_path:=/path/to/efficient_sam3_repvit_s.pt
+        model_path:=/path/to/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt
     
     # For EuRoC dataset testing
     ros2 launch efficientsam3_ros2 slam_pipeline.launch.py \
@@ -43,10 +43,13 @@ def generate_launch_description():
     # =========================================================================
     
     # EfficientSAM3 arguments
+    # NOTE: do not default to the old efficient_sam3_repvit_s.pt - its text
+    # encoder is silently broken (docs/PAPER_DL_FINDINGS.md §2).
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='/home/user/weights/efficient_sam3_repvit_s.pt',
-        description='Path to EfficientSAM3 model checkpoint'
+        default_value=os.path.expanduser(
+            '~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt'),
+        description='Path to EfficientSAM3.1 model checkpoint (sam3p1 ctx16)'
     )
     
     efficientsam3_path_arg = DeclareLaunchArgument(
@@ -128,11 +131,13 @@ def generate_launch_description():
             'publish_detections': False,
             'backbone_type': 'repvit',
             'model_name': 's',
-            'process_every_n_frames': 1,
-            'dynamic_classes': [
-                'person', 'car', 'truck', 'bus', 
-                'motorcycle', 'bicycle', 'dog', 'cat'
-            ],
+            'process_every_n_frames': 2,
+            'use_fp16': True,
+            # Winning config validated with sam3p1 (docs/PAPER_DL_FINDINGS.md §8):
+            # a single "person" prompt at threshold 0.3.
+            'dynamic_prompts': ['person'],
+            # DEPRECATED: dynamic_classes is ignored for inference.
+            'dynamic_classes': ['person'],
         }],
     )
     
@@ -170,10 +175,11 @@ def generate_filter_only_launch_description():
     
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='/home/user/weights/efficient_sam3_repvit_s.pt',
-        description='Path to EfficientSAM3 model checkpoint'
+        default_value=os.path.expanduser(
+            '~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt'),
+        description='Path to EfficientSAM3.1 model checkpoint (sam3p1 ctx16)'
     )
-    
+
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
         default_value='/camera/image_raw',

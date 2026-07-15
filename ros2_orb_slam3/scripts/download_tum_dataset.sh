@@ -208,7 +208,7 @@ if [ -d "$FINAL_DIR" ] && [ -f "$FINAL_DIR/rgb.txt" ]; then
     echo ""
     echo "  # Terminal 1 - Filter node"
     echo "  ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \\"
-    echo "      -p model_path:=\$HOME/weights/efficient_sam3_repvit_s.pt"
+    echo "      -p model_path:=\$HOME/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt"
     echo ""
     echo "  # Terminal 2 - ORB-SLAM3 (using filtered images)"
     echo "  ros2 run ros2_orb_slam3 mono_node_cpp --ros-args \\"

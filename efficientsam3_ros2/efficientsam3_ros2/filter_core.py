@@ -9,8 +9,8 @@ Usage (standalone testing):
     from filter_core import DynamicObjectFilter
     
     filter = DynamicObjectFilter(
-        model_path="path/to/checkpoint.pt",
-        dynamic_classes=["person", "car", "bicycle"]
+        model_path="path/to/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt",
+        dynamic_prompts=["person"],
     )
     
     filtered_image, masks, detections = filter.process_frame(image)
@@ -72,7 +72,8 @@ class DynamicObjectFilter:
     Args:
         model_path: Path to the EfficientSAM3 checkpoint file
         efficientsam3_path: Path to the efficientsam3_arm package (if not in PYTHONPATH)
-        dynamic_classes: List of object classes to filter (e.g., ["person", "car"])
+        dynamic_classes: DEPRECATED - ignored for inference, use dynamic_prompts
+        dynamic_prompts: Text prompts fed to the model (default: ["person"])
         confidence_threshold: Minimum confidence for detection (0.0 to 1.0)
         masking_strategy: How to handle masked regions
         device: Device to run inference on ("cpu", "mps", "cuda", or "auto")
@@ -80,10 +81,20 @@ class DynamicObjectFilter:
         model_name: EfficientSAM3 model size (default: "s" for small)
     """
     
-    # Default body-part prompts that work well with MobileCLIP-S1 text encoder.
-    # Generic class names like "person" score very low; body-part prompts
-    # produce much stronger detections. We union all masks for the final result.
+    # Default prompt validated with the EfficientSAM3.1 checkpoint
+    # (efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt): a single "person"
+    # prompt at threshold 0.3 gives clean, confident detections and is ~6x
+    # faster than the legacy 6-prompt sweep (see docs/PAPER_DL_FINDINGS.md §3/§8).
     DEFAULT_DYNAMIC_PROMPTS = [
+        "person",
+    ]
+
+    # LEGACY: body-part prompts that were needed to work around the weak/broken
+    # MobileCLIP-S1 text encoder in the OLD efficient_sam3_repvit_s.pt checkpoint
+    # (silent text-encoder failure, docs/PAPER_DL_FINDINGS.md §2). Generic class
+    # names scored near zero there, so we unioned many body-part masks at a very
+    # low threshold (0.03). Do NOT use with sam3p1 checkpoints.
+    LEGACY_S1_DYNAMIC_PROMPTS = [
         "human leg and hands",
         "human shirt",
         "human face",
@@ -91,57 +102,75 @@ class DynamicObjectFilter:
         "humans pants",
         "human head",
     ]
-    
-    # Reduced prompt set for CPU-constrained environments (3 prompts ≈ half
-    # the inference time while still covering head-to-toe).
+
+    # Reduced legacy prompt set for CPU-constrained environments (3 prompts ≈ half
+    # the inference time while still covering head-to-toe). Only relevant for the
+    # legacy S1 checkpoints; sam3p1 needs just "person".
     FAST_DYNAMIC_PROMPTS = [
         "human head and face",
         "human shirt and body",
         "human legs and pants",
     ]
-    
+
     # Legacy: kept for API compatibility but DEFAULT_DYNAMIC_PROMPTS is used instead
     DEFAULT_DYNAMIC_CLASSES = [
         "person",
     ]
-    
-    # Map checkpoint filename patterns to (backbone_type, model_name, text_encoder_type)
+
+    # Map checkpoint filename patterns to
+    #   (backbone_type, model_name, text_encoder_type,
+    #    text_encoder_context_length, text_encoder_pos_embed_table_size)
+    # First match wins (dicts preserve insertion order), so the more specific
+    # sam3p1/ctx16 entries MUST come before the legacy patterns ("repvit_s"
+    # would otherwise shadow "sam3p1_repvit_s_...").
+    # Legacy checkpoints use context length 32 with pos_embed_table_size None
+    # (model_builder_arm.py then keeps the legacy 77-entry positional table),
+    # which matches the old 3-tuple behavior exactly.
     MODEL_FILENAME_MAP = {
-        "repvit-m0_9_mobileclip_s1": ("repvit", "m0_9", "MobileCLIP-S1"),
-        "repvit-m0_9": ("repvit", "m0_9", "MobileCLIP-S1"),
-        "repvit_m0_9": ("repvit", "m0_9", "MobileCLIP-S1"),
-        "repvit_s": ("repvit", "m0_9", "MobileCLIP-S1"),
-        "repvit_m1_1": ("repvit", "m1_1", "MobileCLIP-S1"),
-        "repvit_m2_3": ("repvit", "m2_3", "MobileCLIP-S1"),
-        "tinyvit_m": ("tinyvit", "m", "MobileCLIP-S1"),
-        "tinyvit_l": ("tinyvit", "l", "MobileCLIP-S1"),
+        # EfficientSAM3.1 (sam3p1) checkpoints — fixed-context text encoder,
+        # positional table sized to the training context (16).
+        "sam3p1_repvit_s_mobileclip_s0_ctx16": ("repvit", "m0_9", "MobileCLIP-S0", 16, 16),
+        "sam3p1_repvit_s": ("repvit", "m0_9", "MobileCLIP-S0", 16, 16),
+        "sam3p1": ("repvit", "m0_9", "MobileCLIP-S0", 16, 16),
+        # Legacy SAM3 checkpoints (MobileCLIP-S1 text encoder, ctx 32,
+        # legacy 77-entry positional table).
+        "repvit-m0_9_mobileclip_s1": ("repvit", "m0_9", "MobileCLIP-S1", 32, None),
+        "repvit-m0_9": ("repvit", "m0_9", "MobileCLIP-S1", 32, None),
+        "repvit_m0_9": ("repvit", "m0_9", "MobileCLIP-S1", 32, None),
+        "repvit_s": ("repvit", "m0_9", "MobileCLIP-S1", 32, None),
+        "repvit_m1_1": ("repvit", "m1_1", "MobileCLIP-S1", 32, None),
+        "repvit_m2_3": ("repvit", "m2_3", "MobileCLIP-S1", 32, None),
+        "tinyvit_m": ("tinyvit", "m", "MobileCLIP-S1", 32, None),
+        "tinyvit_l": ("tinyvit", "l", "MobileCLIP-S1", 32, None),
     }
-    
+
     @staticmethod
     def _infer_model_config(model_path: str, backbone_type: str, model_name: str):
         """
-        Auto-detect backbone_type, model_name, and text_encoder_type from the checkpoint filename.
-        Falls back to provided defaults if detection fails.
+        Auto-detect (backbone_type, model_name, text_encoder_type,
+        text_encoder_context_length, text_encoder_pos_embed_table_size) from the
+        checkpoint filename. Falls back to provided defaults (with legacy text
+        encoder settings) if detection fails.
         """
         import os
         basename = os.path.basename(model_path).lower()
         # Strip prefix and extension: "efficient_sam3_repvit-m0_9_mobileclip_s1.pth" -> "repvit-m0_9_mobileclip_s1"
         stem = basename.replace("efficient_sam3_", "").replace(".pth", "").replace(".pt", "")
-        
-        for pattern, (bt, mn, te) in DynamicObjectFilter.MODEL_FILENAME_MAP.items():
+
+        for pattern, cfg in DynamicObjectFilter.MODEL_FILENAME_MAP.items():
             if pattern in stem:
-                return bt, mn, te
-        
-        # Fallback to provided values
-        return backbone_type, model_name, "MobileCLIP-S1"
+                return cfg
+
+        # Fallback to provided values with legacy text encoder settings
+        return backbone_type, model_name, "MobileCLIP-S1", 32, None
 
     def __init__(
         self,
         model_path: str,
         efficientsam3_path: Optional[str] = None,
-        dynamic_classes: Optional[List[str]] = None,
+        dynamic_classes: Optional[List[str]] = None,  # DEPRECATED, use dynamic_prompts
         dynamic_prompts: Optional[List[str]] = None,
-        confidence_threshold: float = 0.03,
+        confidence_threshold: float = 0.3,
         masking_strategy: MaskingStrategy = MaskingStrategy.GRAYOUT,
         device: str = "auto",
         backbone_type: str = "repvit",
@@ -159,15 +188,31 @@ class DynamicObjectFilter:
                   f"({max(1, num_threads // 2)} interop threads)")
         
         self.model_path = model_path
+        # DEPRECATED: dynamic_classes is kept only for backward compatibility.
+        # The model is prompted with dynamic_prompts; dynamic_classes is unused
+        # for inference and will be removed in a future release.
+        if dynamic_classes is not None:
+            import warnings
+            warnings.warn(
+                "dynamic_classes is deprecated and ignored for inference; "
+                "use dynamic_prompts instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.dynamic_classes = dynamic_classes or self.DEFAULT_DYNAMIC_CLASSES
         self.dynamic_prompts = dynamic_prompts or self.DEFAULT_DYNAMIC_PROMPTS
         self.confidence_threshold = confidence_threshold
         self.masking_strategy = masking_strategy
-        
-        # Auto-detect backbone, model name, and text encoder from checkpoint filename
-        self.backbone_type, self.model_name, self.text_encoder_type = self._infer_model_config(
-            model_path, backbone_type, model_name
-        )
+
+        # Auto-detect backbone, model name, text encoder and text-encoder
+        # context settings from the checkpoint filename
+        (
+            self.backbone_type,
+            self.model_name,
+            self.text_encoder_type,
+            self.text_encoder_context_length,
+            self.text_encoder_pos_embed_table_size,
+        ) = self._infer_model_config(model_path, backbone_type, model_name)
         
         # Add efficientsam3_arm to path if specified
         if efficientsam3_path:
@@ -211,14 +256,19 @@ class DynamicObjectFilter:
             from efficientsam3_arm.model.sam3_image_processor import Sam3Processor
             
             print(f"Loading EfficientSAM3 model from {self.model_path}...")
-            print(f"Device: {self.device}, Backbone: {self.backbone_type}, Size: {self.model_name}, Text Encoder: {self.text_encoder_type}")
-            
+            print(f"Device: {self.device}, Backbone: {self.backbone_type}, Size: {self.model_name}, "
+                  f"Text Encoder: {self.text_encoder_type} "
+                  f"(ctx={self.text_encoder_context_length}, "
+                  f"pos_embed_table={self.text_encoder_pos_embed_table_size})")
+
             # Build model (matching the reference notebook usage)
             self._model = build_efficientsam3_image_model(
                 checkpoint_path=self.model_path,
                 backbone_type=self.backbone_type,
                 model_name=self.model_name,
                 text_encoder_type=self.text_encoder_type,
+                text_encoder_context_length=self.text_encoder_context_length,
+                text_encoder_pos_embed_table_size=self.text_encoder_pos_embed_table_size,
                 device=self.device,
                 enable_inst_interactivity=False,
             )
@@ -371,7 +421,7 @@ class DynamicObjectFilter:
         return result
     
     def update_dynamic_classes(self, classes: List[str]) -> None:
-        """Update the list of dynamic object classes to filter."""
+        """DEPRECATED: update dynamic_classes (use dynamic_prompts instead)."""
         self.dynamic_classes = classes
         self._text_prompt = self._build_text_prompt()
     

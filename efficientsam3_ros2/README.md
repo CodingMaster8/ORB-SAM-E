@@ -41,12 +41,16 @@ pip install torch torchvision numpy opencv-python pillow
 ```
 
 ### Model Weights
-Download EfficientSAM3 checkpoint from [HuggingFace](https://huggingface.co/Simon7108528/EfficientSAM3):
+Download the EfficientSAM3.1 checkpoint from [HuggingFace](https://huggingface.co/Simon7108528/EfficientSAM3):
 ```bash
 mkdir -p ~/weights
-wget -O ~/weights/efficient_sam3_repvit_s.pt \
-    https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_all_converted/efficient_sam3_repvit_s.pt
+wget -O ~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt \
+    https://huggingface.co/Simon7108528/EfficientSAM3/resolve/main/stage1_sam3p1/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt
 ```
+
+> **WARNING:** do NOT use the old `efficient_sam3_repvit_s.pt` checkpoint.
+> Its text encoder is silently broken (all prompts score near zero) — see
+> `docs/PAPER_DL_FINDINGS.md` §2.
 
 ## Installation
 
@@ -86,7 +90,7 @@ source install/setup.bash
 ```bash
 # Terminal 1: Launch the filter node
 ros2 launch efficientsam3_ros2 slam_pipeline.launch.py \
-    model_path:=/home/user/weights/efficient_sam3_repvit_s.pt
+    model_path:=/home/user/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt
 
 # Terminal 2: Start ORB-SLAM3 C++ node (with filtered images)
 ros2 run ros2_orb_slam3 mono_node_cpp --ros-args \
@@ -105,7 +109,7 @@ ros2 run ros2_orb_slam3 mono_driver_filtered_node.py --ros-args \
 ```bash
 # Terminal 1: Start filter node
 ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
-    -p model_path:=/home/user/weights/efficient_sam3_repvit_s.pt \
+    -p model_path:=/home/user/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt \
     -p input_topic:=/camera/image_raw \
     -p output_topic:=/camera/image_filtered
 
@@ -135,16 +139,18 @@ ros2 run ros2_orb_slam3 mono_driver_node.py --ros-args \
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `model_path` | string | required | Path to EfficientSAM3 checkpoint |
+| `model_path` | string | ~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt | Path to EfficientSAM3.1 checkpoint |
 | `efficientsam3_path` | string | "" | Path to efficientsam3_arm package |
-| `dynamic_classes` | list | [person, car, ...] | Object classes to filter |
+| `dynamic_prompts` | list | ["person"] | Text prompts fed to the model |
+| `dynamic_classes` | list | ["person"] | DEPRECATED - ignored, use dynamic_prompts |
 | `confidence_threshold` | float | 0.3 | Detection confidence threshold |
 | `masking_strategy` | string | "grayout" | How to handle masked regions |
 | `input_topic` | string | /camera/image_raw | Input image topic |
 | `output_topic` | string | /camera/image_filtered | Output filtered image topic |
 | `publish_mask` | bool | true | Publish mask visualization |
 | `device` | string | "auto" | Inference device (auto/cpu/cuda) |
-| `process_every_n_frames` | int | 1 | Frame skip for performance |
+| `use_fp16` | bool | true | fp16 autocast on CUDA (~1.9x on Orin) |
+| `process_every_n_frames` | int | 2 | Frame skip for performance |
 
 ### Masking Strategies
 
@@ -162,13 +168,12 @@ Edit `config/dynamic_filter.yaml` for custom settings:
 ```yaml
 dynamic_filter_node:
   ros__parameters:
-    model_path: "/home/user/weights/efficient_sam3_repvit_s.pt"
-    dynamic_classes:
+    model_path: "/home/user/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt"
+    dynamic_prompts:
       - "person"
-      - "car"
-      - "bicycle"
     confidence_threshold: 0.3
     masking_strategy: "grayout"
+    use_fp16: true
 ```
 
 ## Topics
@@ -191,7 +196,7 @@ You can test the filtering logic locally on MacOS:
 cd efficientsam3_ros2/efficientsam3_ros2
 python filter_core.py \
     --image /path/to/test_image.jpg \
-    --model /path/to/efficient_sam3_repvit_s.pt \
+    --model /path/to/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt \
     --efficientsam3-path /path/to/efficientsam3_arm
 ```
 
