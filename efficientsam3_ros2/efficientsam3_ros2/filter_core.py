@@ -222,7 +222,11 @@ class DynamicObjectFilter:
                 device=self.device,
                 enable_inst_interactivity=False,
             )
-            
+
+            # Guard against a wrong checkpoint leaving the text encoder
+            # randomly initialized (silent garbage detections).
+            self._verify_checkpoint_weights()
+
             # Create processor
             self._processor = Sam3Processor(
                 model=self._model,
@@ -240,7 +244,42 @@ class DynamicObjectFilter:
             )
         except Exception as e:
             raise RuntimeError(f"Failed to load EfficientSAM3 model: {e}")
-    
+
+    def _verify_checkpoint_weights(self) -> None:
+        """
+        Fail fast if the checkpoint left critical submodules uninitialized.
+
+        model_builder_arm._load_checkpoint() loads the state dict with
+        strict=False and records what was NOT found in the checkpoint on
+        model.checkpoint_missing_keys. If the text encoder weights are
+        missing (keys under "backbone.language_backbone."), the language
+        backbone stays randomly initialized and the model produces garbage
+        detections *silently* — this has bitten us twice (cloud + robot).
+
+        Note: the known-good sam3p1 checkpoint legitimately leaves 4 missing
+        keys under "backbone.vision_backbone.convs.3." (an unused DualNeck
+        level that scalp=1 discards; see docs/PAPER_DL_FINDINGS.md §6), so
+        we must only trip on language_backbone keys.
+        """
+        missing_keys = getattr(self._model, "checkpoint_missing_keys", None)
+        if not missing_keys:
+            return
+
+        text_encoder_missing = [
+            k for k in missing_keys if k.startswith("backbone.language_backbone.")
+        ]
+        if text_encoder_missing:
+            raise RuntimeError(
+                f"Checkpoint '{self.model_path}' contains no text-encoder weights: "
+                f"{len(text_encoder_missing)} keys under 'backbone.language_backbone.' "
+                f"are missing, so the language backbone is randomly initialized and "
+                f"the model would silently produce garbage detections. This happens "
+                f"when using a checkpoint without text-encoder weights (e.g. "
+                f"'efficient_sam3_repvit_s.pt'). Use a checkpoint that bundles them, "
+                f"e.g. 'efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt', instead. "
+                f"First missing key: '{text_encoder_missing[0]}'"
+            )
+
     def ensure_model_loaded(self) -> None:
         """
         Eagerly load the model. Call this at startup to avoid cold-start

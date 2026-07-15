@@ -709,6 +709,9 @@ def _load_checkpoint(model, checkpoint_path, device="cpu"):
             }
         )
     missing_keys, _ = model.load_state_dict(sam3_image_ckpt, strict=False)
+    # Surface missing keys so callers can validate the checkpoint actually
+    # initialized the components they rely on (e.g. the text encoder).
+    model.checkpoint_missing_keys = list(missing_keys)
     if len(missing_keys) > 0:
         print(
             f"loaded {checkpoint_path} and found "
