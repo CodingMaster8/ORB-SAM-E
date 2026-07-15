@@ -58,7 +58,24 @@ dynamic_filter_node:
     #   "inpaint"   - Use OpenCV inpainting (slower but cleaner)
     #   "blur"      - Apply Gaussian blur to masked regions
     masking_strategy: "grayout"
-    
+
+    # Dilate the cached mask by this radius (pixels, elliptical kernel) before
+    # applying it to each frame. Inference is slow (~0.6-1.3 s on Jetson Orin),
+    # so the mask is reused for many frames; dilation keeps a moving object
+    # covered even after it has shifted since the mask was computed.
+    # 0 disables dilation.
+    mask_dilation_px: 20
+
+    # Extra dilation radius per second of mask staleness (pixels/second).
+    # e.g. 30.0 grows the safety margin as the mask ages. 0.0 disables.
+    mask_dilation_px_per_sec: 0.0
+
+    # Maximum age (seconds) of the cached mask. If the last successful
+    # inference is older than this (e.g. the worker crashed or stalled),
+    # frames are published unfiltered and a throttled warning is logged.
+    # <= 0 disables expiry (old behavior: mask applied forever).
+    mask_max_age_sec: 2.0
+
     # =========================================================================
     # Topic Configuration
     # =========================================================================

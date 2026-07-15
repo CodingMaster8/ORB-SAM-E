@@ -23,6 +23,9 @@ Parameters:
     output_topic (str): Output filtered image topic name
     publish_mask (bool): Whether to publish mask visualization
     publish_detections (bool): Whether to publish detection info
+    mask_dilation_px (int): Dilate the cached mask by this many pixels (0 disables)
+    mask_dilation_px_per_sec (float): Extra dilation per second of mask age (0 disables)
+    mask_max_age_sec (float): Stop applying masks older than this (<=0 disables)
 
 Usage:
     ros2 run efficientsam3_ros2 dynamic_filter_node --ros-args \
@@ -34,7 +37,8 @@ Author: Generated for EfficientSAM3 + ROS2 ORB-SLAM3 integration
 
 import json
 import threading
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 import numpy as np
 import cv2
@@ -84,6 +88,11 @@ class DynamicFilterNode(Node):
         self.num_threads = self.get_parameter('num_threads').value
         self.metrics_output = self.get_parameter('metrics_output').value
         self.use_fp16 = self.get_parameter('use_fp16').value
+        self.mask_dilation_px = int(self.get_parameter('mask_dilation_px').value)
+        self.mask_dilation_px_per_sec = float(
+            self.get_parameter('mask_dilation_px_per_sec').value
+        )
+        self.mask_max_age_sec = float(self.get_parameter('mask_max_age_sec').value)
         
         # Validate model path
         if not self.model_path:
@@ -116,6 +125,11 @@ class DynamicFilterNode(Node):
         self.get_logger().info(f"  Output topic: {self.output_topic}")
         self.get_logger().info(f"  Process every N frames: {self.process_every_n_frames}")
         self.get_logger().info(f"  fp16 autocast: {self.use_fp16}")
+        self.get_logger().info(
+            f"  Mask dilation: {self.mask_dilation_px} px "
+            f"(+{self.mask_dilation_px_per_sec} px/s of staleness)"
+        )
+        self.get_logger().info(f"  Mask max age: {self.mask_max_age_sec} s")
         self.get_logger().info(f"  Num prompts: {len(self.dynamic_prompts)}")
         self.get_logger().info(f"  CPU threads: {self.num_threads if self.num_threads > 0 else 'auto'}")
         self.get_logger().info("=" * 60)
@@ -149,9 +163,16 @@ class DynamicFilterNode(Node):
         # available mask and republishes at full camera rate, while a worker
         # thread keeps refreshing the mask on the newest frame.
         self.frame_count = 0
-        self.last_mask: Optional[np.ndarray] = None  # replaced by reference swap (atomic under GIL)
+        # Latest successful inference result: (mask-or-None, monotonic timestamp).
+        # Swapped as a single tuple reference (atomic under GIL) so the mask and
+        # its age are always read consistently in the image callback.
+        self._mask_state: Optional[Tuple[Optional[np.ndarray], float]] = None
         self.skipped_frames = 0   # passthrough frames published with no mask available
         self.reused_frames = 0    # frames published with a (possibly stale) mask
+        self.expired_frames = 0   # passthrough frames because the cached mask was too old
+        # Cached elliptical dilation kernel (rebuilt when the radius changes).
+        self._dilate_kernel: Optional[np.ndarray] = None
+        self._dilate_kernel_px = -1
         self._latest_frame = None  # newest (cv_image, header) awaiting inference
         self._frame_lock = threading.Lock()
         self._new_frame_evt = threading.Event()
@@ -233,6 +254,16 @@ class DynamicFilterNode(Node):
         self.declare_parameter('metrics_output', '')
         self.declare_parameter('num_threads', 0)  # 0 = PyTorch default
         self.declare_parameter('use_fp16', False)  # fp16 autocast on CUDA (~1.9x on Orin)
+        # Dilate the cached mask (elliptical kernel, radius in pixels) before
+        # applying it, to cover object motion between slow inference updates.
+        # 0 disables dilation.
+        self.declare_parameter('mask_dilation_px', 20)
+        # Extra dilation radius per second of mask staleness (pixels/second).
+        # 0.0 disables age-scaled dilation.
+        self.declare_parameter('mask_dilation_px_per_sec', 0.0)
+        # If the last successful inference is older than this (seconds), stop
+        # applying the mask and pass frames through unfiltered. <= 0 disables.
+        self.declare_parameter('mask_max_age_sec', 2.0)
     
     def image_callback(self, msg: Image):
         """
@@ -258,8 +289,31 @@ class DynamicFilterNode(Node):
         
         # Apply the most recent mask (possibly a few frames stale - dynamic objects
         # move little in ~0.6s at robot speeds) and publish at full camera rate.
-        mask = self.last_mask
+        # The mask is dilated to cover object motion since it was computed, and
+        # dropped entirely (passthrough) once it exceeds mask_max_age_sec.
+        mask_state = self._mask_state
+        if mask_state is not None:
+            mask, mask_stamp = mask_state
+            mask_age = time.monotonic() - mask_stamp
+        else:
+            mask, mask_age = None, None
+
+        if (
+            mask is not None
+            and self.mask_max_age_sec > 0.0
+            and mask_age > self.mask_max_age_sec
+        ):
+            self.get_logger().warning(
+                f"Cached dynamic-object mask is stale ({mask_age:.1f}s > "
+                f"{self.mask_max_age_sec:.1f}s limit); publishing frames "
+                f"unfiltered until inference recovers",
+                throttle_duration_sec=5.0,
+            )
+            mask = None
+            self.expired_frames += 1
+
         if mask is not None and mask.any():
+            mask = self._dilate_mask(mask, mask_age)
             filtered_image = self.filter._apply_mask(cv_image, mask)
             self.reused_frames += 1
         else:
@@ -286,6 +340,29 @@ class DynamicFilterNode(Node):
             except CvBridgeError as e:
                 self.get_logger().error(f"Error publishing mask: {e}")
     
+    def _dilate_mask(self, mask: np.ndarray, age_sec: Optional[float]) -> np.ndarray:
+        """
+        Dilate the cached mask with an elliptical kernel so it still covers a
+        moving object that has shifted since the mask was computed.
+
+        Radius = mask_dilation_px + mask_dilation_px_per_sec * mask age.
+        Returns the mask unchanged if the effective radius is <= 0.
+        """
+        px = self.mask_dilation_px
+        if self.mask_dilation_px_per_sec > 0.0 and age_sec is not None:
+            px += int(self.mask_dilation_px_per_sec * age_sec)
+        if px <= 0:
+            return mask
+        # Cap the kernel radius so a pathological age can't blank the frame
+        # (and to bound the cost of cv2.dilate).
+        px = min(px, 100)
+        if px != self._dilate_kernel_px:
+            self._dilate_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * px + 1, 2 * px + 1)
+            )
+            self._dilate_kernel_px = px
+        return cv2.dilate(mask.astype(np.uint8), self._dilate_kernel)
+
     def _inference_loop(self):
         """Worker thread: run EfficientSAM3 on the newest frame, refresh the mask.
         
@@ -313,11 +390,15 @@ class DynamicFilterNode(Node):
             try:
                 _, mask, detections = self.filter.process_frame(cv_image)
             except Exception as e:
+                # Note: the timestamp in _mask_state is NOT refreshed on failure,
+                # so a crashing/stuck worker lets the cached mask age out and the
+                # callback falls back to passthrough after mask_max_age_sec.
                 self.get_logger().error(f"Inference error: {e}")
                 continue
-            
-            # Atomic reference swap; the callback picks it up on the next frame.
-            self.last_mask = mask
+
+            # Atomic reference swap (mask + freshness timestamp together);
+            # the callback picks it up on the next frame.
+            self._mask_state = (mask, time.monotonic())
             
             # Publish detections info if enabled
             if self.detections_pub is not None and detections:
@@ -338,7 +419,8 @@ class DynamicFilterNode(Node):
             f"Stats: received={self.frame_count}, "
             f"inferred={stats['total_frames_processed']} (async), "
             f"published_with_mask={self.reused_frames}, "
-            f"published_no_mask={self.skipped_frames}, "
+            f"published_no_mask={self.skipped_frames} "
+            f"(expired={self.expired_frames}), "
             f"detections={stats['total_detections']}, "
             f"avg_det/frame={stats['avg_detections_per_frame']:.2f}, "
             f"inference={stats['inference_fps']:.1f} FPS "
