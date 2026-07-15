@@ -15,9 +15,11 @@ Published Topics:
 
 Parameters:
     model_path (str): Path to EfficientSAM3 checkpoint
+        (default: ~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt)
     efficientsam3_path (str): Path to efficientsam3_arm package
-    dynamic_classes (list): List of object classes to filter
-    confidence_threshold (float): Detection confidence threshold
+    dynamic_classes (list): DEPRECATED - ignored for inference, use dynamic_prompts
+    dynamic_prompts (list): Text prompts fed to the model (default: ["person"])
+    confidence_threshold (float): Detection confidence threshold (default: 0.3)
     masking_strategy (str): How to handle masked regions
     input_topic (str): Input image topic name
     output_topic (str): Output filtered image topic name
@@ -33,6 +35,7 @@ Author: Generated for EfficientSAM3 + ROS2 ORB-SLAM3 integration
 """
 
 import json
+import os
 import threading
 from typing import Optional
 
@@ -210,16 +213,25 @@ class DynamicFilterNode(Node):
         self.get_logger().info(f"Waiting for images on {self.input_topic}...")
     
     def _declare_parameters(self):
-        """Declare all ROS2 parameters with default values."""
-        self.declare_parameter('model_path', '')
+        """Declare all ROS2 parameters with default values.
+
+        Defaults follow the validated sam3p1 winning config
+        (docs/PAPER_DL_FINDINGS.md §8): single "person" prompt, threshold 0.3,
+        fp16 autocast, efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt.
+        Do NOT use the old efficient_sam3_repvit_s.pt checkpoint - its text
+        encoder is silently broken (docs/PAPER_DL_FINDINGS.md §2).
+        """
+        self.declare_parameter(
+            'model_path',
+            os.path.expanduser('~/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt')
+        )
         self.declare_parameter('efficientsam3_path', '')
+        # DEPRECATED: dynamic_classes is ignored for inference; use dynamic_prompts.
         self.declare_parameter('dynamic_classes', ['person'])
-        # Multi-prompt body-part prompts that work well with MobileCLIP-S1
-        self.declare_parameter('dynamic_prompts', [
-            'human leg and hands', 'human shirt', 'human face',
-            'human hands', 'humans pants', 'human head'
-        ])
-        self.declare_parameter('confidence_threshold', 0.03)
+        # Validated with the sam3p1 checkpoint: a single "person" prompt at
+        # threshold 0.3 beats the legacy 6-prompt body-part sweep.
+        self.declare_parameter('dynamic_prompts', ['person'])
+        self.declare_parameter('confidence_threshold', 0.3)
         self.declare_parameter('masking_strategy', 'grayout')
         self.declare_parameter('input_topic', '/camera/image_raw')
         self.declare_parameter('output_topic', '/camera/image_filtered')
@@ -228,11 +240,11 @@ class DynamicFilterNode(Node):
         self.declare_parameter('device', 'auto')
         self.declare_parameter('backbone_type', 'repvit')
         self.declare_parameter('model_name', 's')
-        self.declare_parameter('process_every_n_frames', 1)
+        self.declare_parameter('process_every_n_frames', 2)
         # If set, filtering/timing stats are written here (JSON) on shutdown.
         self.declare_parameter('metrics_output', '')
         self.declare_parameter('num_threads', 0)  # 0 = PyTorch default
-        self.declare_parameter('use_fp16', False)  # fp16 autocast on CUDA (~1.9x on Orin)
+        self.declare_parameter('use_fp16', True)  # fp16 autocast on CUDA (~1.9x on Orin)
     
     def image_callback(self, msg: Image):
         """

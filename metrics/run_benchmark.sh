@@ -29,7 +29,7 @@ DATASET=${3:?need DATASET_PATH}
 USE_FILTER=${4:-false}
 OUTDIR=${5:-results/$NAME}
 
-MODEL=${MODEL:-$HOME/weights/efficient_sam3_repvit_s.pt}
+MODEL=${MODEL:-$HOME/weights/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt}
 ESAM3_PATH=${ESAM3_PATH:-$HOME/ros2_ws/src/efficientsam3_arm}
 DEVICE=${DEVICE:-cuda}
 # Directory of this script (so `python -m slam_metrics...` works from anywhere).

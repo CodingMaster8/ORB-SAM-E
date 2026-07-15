@@ -9,42 +9,49 @@ dynamic_filter_node:
     # Model Configuration
     # =========================================================================
     
-    # Path to the EfficientSAM3 model checkpoint
-    # Download from: https://huggingface.co/Simon7108528/EfficientSAM3
-    model_path: "/path/to/efficient_sam3_repvit_s.pt"
-    
+    # Path to the EfficientSAM3.1 model checkpoint (validated winning config,
+    # see docs/PAPER_DL_FINDINGS.md §8)
+    #
+    # !!! WARNING: do NOT use the old efficient_sam3_repvit_s.pt checkpoint !!!
+    # Its text encoder is SILENTLY BROKEN (all prompts score near zero,
+    # docs/PAPER_DL_FINDINGS.md §2). Use the sam3p1 ctx16 checkpoint below.
+    model_path: "/path/to/efficient_sam3p1_repvit_s_mobileclip_s0_ctx16.pt"
+
     # Path to efficientsam3_arm package (leave empty if installed via pip or in PYTHONPATH)
     efficientsam3_path: ""
-    
+
     # Backbone type: "repvit", "tinyvit", or "efficientvit"
+    # (auto-detected from the checkpoint filename; this is only a fallback)
     backbone_type: "repvit"
-    
+
     # Model size: "s" (small), "m" (medium), or "l" (large)
+    # (auto-detected from the checkpoint filename; this is only a fallback)
     model_name: "s"
-    
+
     # Device for inference: "auto", "cpu", "cuda", or "mps"
     device: "auto"
-    
+
+    # fp16 autocast on CUDA (~1.9x speedup on Orin, identical masks)
+    use_fp16: true
+
     # =========================================================================
     # Detection Configuration
     # =========================================================================
-    
-    # List of dynamic object classes to detect and filter
-    # These objects will be masked out before SLAM processing
+
+    # DEPRECATED: dynamic_classes is ignored for inference. Use dynamic_prompts.
     dynamic_classes:
       - "person"
-      - "car"
-      - "truck"
-      - "bus"
-      - "motorcycle"
-      - "bicycle"
-      - "dog"
-      - "cat"
-      - "bird"
-    
+
+    # Text prompts fed to the model. With the sam3p1 checkpoint a single
+    # "person" prompt is the validated winning config (faster and more
+    # confident than multi-prompt sweeps).
+    dynamic_prompts:
+      - "person"
+
     # Minimum confidence threshold for detections (0.0 to 1.0)
     # Lower = more detections but more false positives
     # Higher = fewer detections but more precise
+    # 0.3 validated with the sam3p1 checkpoint + "person" prompt
     confidence_threshold: 0.3
     
     # =========================================================================
@@ -82,7 +89,8 @@ dynamic_filter_node:
     # Process every N frames (1 = every frame, 2 = every other frame, etc.)
     # Higher values improve FPS but may miss fast-moving objects
     # The last mask is reused for skipped frames
-    process_every_n_frames: 1
+    # 2 validated on the Orin alongside ORB-SLAM3 (docs/PAPER_DL_FINDINGS.md §8)
+    process_every_n_frames: 2
 
 
 # =========================================================================
@@ -92,17 +100,17 @@ dynamic_filter_node:
 # For indoor environments (office, home)
 # dynamic_filter_indoor:
 #   ros__parameters:
-#     dynamic_classes:
+#     dynamic_prompts:
 #       - "person"
 #       - "dog"
 #       - "cat"
-#     confidence_threshold: 0.4
+#     confidence_threshold: 0.3
 #     process_every_n_frames: 2
 
 # For outdoor/driving scenarios
 # dynamic_filter_outdoor:
 #   ros__parameters:
-#     dynamic_classes:
+#     dynamic_prompts:
 #       - "person"
 #       - "car"
 #       - "truck"
@@ -110,4 +118,4 @@ dynamic_filter_node:
 #       - "motorcycle"
 #       - "bicycle"
 #     confidence_threshold: 0.3
-#     process_every_n_frames: 1
+#     process_every_n_frames: 2
