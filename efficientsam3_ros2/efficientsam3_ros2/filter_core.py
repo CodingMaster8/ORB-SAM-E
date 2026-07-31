@@ -19,6 +19,7 @@ Usage (standalone testing):
 import sys
 import os
 import time
+import contextlib  # INTERIM (#2): reconcile with validated Orin filter_core.py (#1)
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
@@ -78,6 +79,8 @@ class DynamicObjectFilter:
         device: Device to run inference on ("cpu", "mps", "cuda", or "auto")
         backbone_type: EfficientSAM3 backbone type (default: "repvit")
         model_name: EfficientSAM3 model size (default: "s" for small)
+        use_fp16: Run inference under CUDA fp16 autocast (no-op off CUDA).
+            INTERIM (#2): reconcile with validated Orin filter_core.py (#1).
     """
     
     # Default body-part prompts that work well with MobileCLIP-S1 text encoder.
@@ -147,6 +150,10 @@ class DynamicObjectFilter:
         backbone_type: str = "repvit",
         model_name: str = "s",
         num_threads: int = 0,
+        # INTERIM (#2): reconcile with validated Orin filter_core.py (#1).
+        # fp16 CUDA autocast around inference; verified on the Orin to give
+        # ~1.9x speedup with bit-identical stats vs fp32 (docs/PAPER_DL_FINDINGS.md §5).
+        use_fp16: bool = False,
     ):
         if not TORCH_AVAILABLE:
             raise RuntimeError("PyTorch is required but not installed")
@@ -163,7 +170,10 @@ class DynamicObjectFilter:
         self.dynamic_prompts = dynamic_prompts or self.DEFAULT_DYNAMIC_PROMPTS
         self.confidence_threshold = confidence_threshold
         self.masking_strategy = masking_strategy
-        
+        # INTERIM (#2): reconcile with validated Orin filter_core.py (#1)
+        self.use_fp16 = use_fp16
+        self._text_prompt = self._build_text_prompt()
+
         # Auto-detect backbone, model name, and text encoder from checkpoint filename
         self.backbone_type, self.model_name, self.text_encoder_type = self._infer_model_config(
             model_path, backbone_type, model_name
@@ -192,6 +202,14 @@ class DynamicObjectFilter:
         # Per-frame inference latency (seconds) for FPS / percentile reporting.
         self.inference_times: List[float] = []
     
+    # INTERIM (#2): reconcile with validated Orin filter_core.py (#1).
+    # Reconstructed from test_filter_core.py (test asserts the
+    # '". ".join(classes) + "."' format). Only used by the legacy
+    # dynamic_classes path; process_frame loops over dynamic_prompts.
+    def _build_text_prompt(self) -> str:
+        """Build a single text prompt string from the dynamic class names."""
+        return ". ".join(self.dynamic_classes) + "."
+
     def _get_optimal_device(self) -> str:
         """Auto-detect the best available device."""
         if torch.cuda.is_available():
@@ -279,19 +297,43 @@ class DynamicObjectFilter:
             pil_image = image
             original_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Run inference
-        state = self._processor.set_image(pil_image)
-        state = self._processor.set_text_prompt(self._text_prompt, state)
-        
+        # INTERIM (#2): reconcile with validated Orin filter_core.py (#1).
+        # Run inference once per dynamic prompt and union the results
+        # (docs/PAPER_DL_FINDINGS.md: final mask is the UNION of all prompts'
+        # masks above confidence_threshold; the processor applies the threshold).
+        # fp16 = CUDA autocast, verified bit-identical stats vs fp32 on the Orin.
+        self._cuda_sync()
+        t_start = time.perf_counter()
+
+        if self.use_fp16 and self.device == "cuda":
+            autocast_ctx = torch.autocast("cuda", dtype=torch.float16)
+        else:
+            autocast_ctx = contextlib.nullcontext()
+
+        all_masks, all_boxes, all_scores = [], [], []
+        with autocast_ctx:
+            state = self._processor.set_image(pil_image)
+            for prompt in self.dynamic_prompts:
+                # set_text_prompt re-runs grounding and overwrites the previous
+                # prompt's results in state, so collect them per iteration.
+                state = self._processor.set_text_prompt(prompt, state)
+                if "masks" in state and state["masks"] is not None and len(state["masks"]) > 0:
+                    all_masks.append(state["masks"].float().cpu().numpy())
+                    all_boxes.append(state["boxes"].float().cpu().numpy())
+                    all_scores.append(state["scores"].float().cpu().numpy())
+
+        self._cuda_sync()
+        self.inference_times.append(time.perf_counter() - t_start)
+
         # Extract detections
         detections = []
         combined_mask = None
-        
-        if "masks" in state and state["masks"] is not None and len(state["masks"]) > 0:
-            masks = state["masks"].cpu().numpy()
-            boxes = state["boxes"].cpu().numpy()
-            scores = state["scores"].cpu().numpy()
-            
+
+        if all_scores:
+            masks = np.concatenate(all_masks, axis=0)
+            boxes = np.concatenate(all_boxes, axis=0)
+            scores = np.concatenate(all_scores, axis=0)
+
             # Remove channel dimension if present
             if masks.ndim == 4:
                 masks = masks.squeeze(1)
