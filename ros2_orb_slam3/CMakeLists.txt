@@ -22,6 +22,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 # find_package(your_custom_msg_interface REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(message_filters REQUIRED) # RGB-D: pair rgb + depth streams by timestamp
 find_package(OpenCV 4.2 REQUIRED)
 find_package(Eigen3 3.3.0 REQUIRED) # Matched with Sophus
 find_package(Pangolin REQUIRED)
@@ -55,6 +56,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   geometry_msgs
   # your_custom_msg_interface
   cv_bridge
+  message_filters
   image_transport
   OpenCV
   Eigen3
@@ -170,13 +172,26 @@ ament_target_dependencies(mono_node_cpp
 target_link_libraries(mono_node_cpp PUBLIC orb_slam3_lib) # Link a node with the internal shared library
 
 
+# RGB-D node (issue #16): synchronized rgb + depth -> TrackRGBD
+add_executable(rgbd_node_cpp
+  src/rgbd_example.cpp
+  src/common_rgbd.cpp
+)
+
+ament_target_dependencies(rgbd_node_cpp
+  PUBLIC ${THIS_PACKAGE_INCLUDE_DEPENDS}
+)
+
+target_link_libraries(rgbd_node_cpp PUBLIC orb_slam3_lib)
+
+
 # Install all the header files in package/package/include
 install (DIRECTORY include/ 
         DESTINATION include
 )
 
 # Install our node and library
-install(TARGETS mono_node_cpp orb_slam3_lib
+install(TARGETS mono_node_cpp rgbd_node_cpp orb_slam3_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -202,6 +217,7 @@ install(PROGRAMS
   scripts/mono_driver_node.py
   scripts/mono_driver_filtered_node.py
   scripts/tum_driver_node.py
+  scripts/tum_rgbd_driver_node.py
   scripts/live_camera_driver_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
